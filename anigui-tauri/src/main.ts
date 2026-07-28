@@ -13,6 +13,12 @@ import { loadBrowse } from "./views/browse";
 import { loadDownloads } from "./views/downloads";
 import { loadTab, loadMore } from "./views/sidebar";
 import { resetPlayButtons } from "./views/detail";
+import { loadCalendar } from "./views/calendar";
+import { loadProfile } from "./views/profile";
+
+// Utilities & Components
+import { wireShortcuts, injectShortcutsOverlay, toggleOverlay } from "./components/shortcuts";
+import { checkForUpdate } from "./components/updater";
 
 // Components
 import { toast } from "./components/toast";
@@ -26,17 +32,32 @@ async function init() {
   updateLoginStatus();
   fetchViewerName(); // non-blocking
 
+  // ── Inject & wire global components ──────────────────────────────────────────
+  injectShortcutsOverlay();
+  wireShortcuts();
+  checkForUpdate();
+
   // ── Initial tab ─────────────────────────────────────────────────────────────
-  loadTab("trending");
+  // Default to the user's watch list if they're already logged in.
+  loadTab(state.config.anilist_token ? "continue" : "trending");
 
   // ── Tab buttons ─────────────────────────────────────────────────────────────
   document.getElementById("tab-trending")!.addEventListener("click", () => loadTab("trending"));
   document.getElementById("tab-continue")!.addEventListener("click", () => loadTab("continue"));
   document.getElementById("tab-planning")!.addEventListener("click", () => loadTab("planning"));
 
-  // ── Browse & Downloads ───────────────────────────────────────────────────────
+  // ── Browse, Downloads, Calendar ──────────────────────────────────────────────
   document.getElementById("btn-browse")!.addEventListener("click", loadBrowse);
   document.getElementById("btn-downloads")!.addEventListener("click", loadDownloads);
+  document.getElementById("btn-calendar")!.addEventListener("click", loadCalendar);
+  document.getElementById("btn-shortcuts")!.addEventListener("click", toggleOverlay);
+
+  // ── Profile (login-status) ────────────────────────────────────────────────────
+  // Logged in  → open Profile on Stats tab
+  // Not logged in → open Profile on History tab (history works without login)
+  document.getElementById("login-status")!.addEventListener("click", () => {
+    loadProfile(state.config.anilist_token ? "stats" : "history");
+  });
 
   // ── Sidebar infinite scroll ──────────────────────────────────────────────────
   document.getElementById("sidebar-list")!.addEventListener("scroll", (e) => {
@@ -76,6 +97,24 @@ async function init() {
 
   await listen("playback_finished", async (event: any) => {
     const { epNum, percent, timePos, elapsed } = event.payload;
+
+    // ── Local history (works without AniList login) ────────────────────────────
+    const histMedia = state.sidebarItems.find(m => m.id === state.activePlayingAnimeId) ?? state.selectedMedia;
+    if (histMedia && state.activePlayingEp != null) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      try {
+        await invoke("append_history", {
+          entry: {
+            animeId:    histMedia.id,
+            animeTitle: histMedia.title.english || histMedia.title.romaji,
+            cover:      histMedia.coverImage.medium,
+            epNum:      state.activePlayingEp,
+            watchedAt:  nowSec,
+          }
+        });
+      } catch { /* non-critical, ignore */ }
+    }
+
     if (!state.config.anilist_token) return;
 
     // Don't sync if the player was open for less than 60 seconds — prevents a
@@ -147,6 +186,8 @@ async function init() {
       status.textContent = event.payload.success ? "✓ Download complete!" : "✗ Download failed.";
       status.style.color = event.payload.success ? "var(--green)" : "var(--red)";
     }
+    // Remove progress bar
+    document.querySelector(".download-progress")?.remove();
     toast(
       event.payload.success ? "Download complete!" : "Download failed.",
       event.payload.success ? "success" : "error"

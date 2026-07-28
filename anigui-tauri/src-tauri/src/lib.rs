@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 
 const ANILIST_API: &str = "https://graphql.anilist.co";
 const ANILIST_CLIENT_ID: &str = "45898";
@@ -31,6 +32,13 @@ fn get_config_path() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| dirs_next::home_dir().unwrap_or_default());
     base.join("anicli-gui").join("config.json")
+}
+
+fn get_history_path() -> std::path::PathBuf {
+    let base = std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| dirs_next::home_dir().unwrap_or_default());
+    base.join("anicli-gui").join("history.json")
 }
 
 fn load_config_from_disk(path: &std::path::Path) -> Config {
@@ -277,6 +285,45 @@ fn planning_query() -> String {
         MEDIA_FIELDS
     )
 }
+
+const AIRING_SCHEDULE_QUERY: &str = r#"
+query ($airingAtGreater: Int, $airingAtLesser: Int, $page: Int) {
+  Page(page: $page, perPage: 50) {
+    airingSchedules(airingAt_greater: $airingAtGreater, airingAt_lesser: $airingAtLesser, sort: TIME) {
+      episode
+      airingAt
+      media {
+        id idMal
+        title { romaji english }
+        coverImage { medium large }
+        episodes averageScore status season seasonYear genres
+        description(asHtml: false)
+        mediaListEntry { id progress status }
+      }
+    }
+  }
+}
+"#;
+
+const USER_STATS_QUERY: &str = r#"
+query ($userId: Int) {
+  User(id: $userId) {
+    name
+    avatar { medium }
+    statistics {
+      anime {
+        count
+        episodesWatched
+        minutesWatched
+        meanScore
+        genres(limit: 5, sort: COUNT_DESC) { genre count }
+        formats { format count minutesWatched }
+        statuses { status count }
+      }
+    }
+  }
+}
+"#;
 
 // ─── Tauri Commands ───────────────────────────────────────────────────────────
 
@@ -601,9 +648,87 @@ async fn get_planning(state: State<'_, AppState>) -> Result<Value, String> {
     ).await
 }
 
+
+// ─── Airing Schedule ──────────────────────────────────────────────────────────
+
 #[tauri::command]
-fn browse_folder() -> String {
-    String::new()
+async fn get_airing_schedule(state: State<'_, AppState>, days_ahead: Option<i64>) -> Result<Value, String> {
+    let token = state.config.lock().unwrap().anilist_token.clone();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+    let days = days_ahead.unwrap_or(7);
+    // Slight look-back (1 h) so "airing now" shows up; look-ahead covers full week.
+    let start = now - 3_600;
+    let end   = now + days * 86_400;
+    anilist_query(
+        AIRING_SCHEDULE_QUERY,
+        serde_json::json!({ "airingAtGreater": start, "airingAtLesser": end, "page": 1 }),
+        token.as_deref(),
+    ).await
+}
+
+// ─── User Stats ────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_user_stats(state: State<'_, AppState>) -> Result<Value, String> {
+    let token = state.config.lock().unwrap().anilist_token.clone();
+    let token = token.ok_or("Not logged in")?;
+    let viewer = anilist_query(VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
+    let user_id = viewer["data"]["Viewer"]["id"]
+        .as_i64()
+        .ok_or("Could not get user ID")?;
+    anilist_query(
+        USER_STATS_QUERY,
+        serde_json::json!({ "userId": user_id }),
+        Some(&token),
+    ).await
+}
+
+// ─── Local Watch History ───────────────────────────────────────────────────────
+
+#[tauri::command]
+fn append_history(entry: Value) -> bool {
+    let path = get_history_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut history: Vec<Value> = if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    history.insert(0, entry);
+    history.truncate(200);
+    if let Ok(data) = serde_json::to_string_pretty(&history) {
+        let _ = std::fs::write(&path, data);
+        true
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+fn get_history() -> Value {
+    let path = get_history_path();
+    if !path.exists() {
+        return serde_json::json!([]);
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!([]))
+}
+
+#[tauri::command]
+fn clear_history() -> bool {
+    let path = get_history_path();
+    let _ = std::fs::write(&path, "[]");
+    true
 }
 
 #[tauri::command]
@@ -682,6 +807,35 @@ fn delete_local_file(path: String) -> Result<Value, String> {
         Ok(_) => Ok(serde_json::json!({ "success": true })),
         Err(e) => Err(e.to_string()),
     }
+}
+
+// ─── Auto-Updater ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Value, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(serde_json::json!({
+            "available": true,
+            "version": update.version,
+            "body": update.body.unwrap_or_default()
+        })),
+        Ok(None) => Ok(serde_json::json!({ "available": false })),
+        Err(e) => Ok(serde_json::json!({ "available": false, "error": e.to_string() })),
+    }
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update
+            .download_and_install(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())?;
+        app.restart();
+    }
+    Ok(())
 }
 
 // ─── MPV Script Installation ────────────────────────────────────────────────────
@@ -805,6 +959,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             config: Mutex::new(config),
             config_path,
@@ -830,7 +985,13 @@ pub fn run() {
             update_status,
             play_episode,
             start_download,
-            browse_folder,
+            get_airing_schedule,
+            get_user_stats,
+            append_history,
+            get_history,
+            clear_history,
+            check_for_update,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

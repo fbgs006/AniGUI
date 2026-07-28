@@ -72,7 +72,7 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
       ${genres.map((g, i) => `<button class="genre-filter${i === 0 ? " active" : ""}" data-genre="${g}">${g}</button>`).join("")}
       <span class="genre-multi-hint" id="genre-multi-hint" style="display:none;"></span>
     </div>
-    <div class="browse-content"></div>`;
+    <div class="browse-content" data-view="${localStorage.getItem("browseView") || "grid"}"></div>`;
 
   const contentDiv = main.querySelector<HTMLElement>(".browse-content")!;
   const years = [...new Set(uniqueItems.map(m => m.seasonYear).filter((y): y is number => Boolean(y)))].sort((a, b) => b - a);
@@ -85,8 +85,25 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
     <select id="browse-season-filter"><option value="">Any season</option><option value="WINTER">Winter</option><option value="SPRING">Spring</option><option value="SUMMER">Summer</option><option value="FALL">Fall</option></select>
     <select id="browse-format-filter"><option value="">Any format</option>${formats.map(f => `<option value="${f}">${f.replace("_", " ")}</option>`).join("")}</select>
     <select id="browse-sort-filter"><option value="default">Default Sort</option><option value="score_desc">Highest Rated</option><option value="score_asc">Lowest Rated</option><option value="year_desc">Newest</option><option value="year_asc">Oldest</option></select>
-    <button class="btn btn-outline" id="browse-clear-filters">Clear</button>`;
+    <button class="btn btn-outline" id="browse-clear-filters">Clear</button>
+    <button class="btn-icon browse-view-toggle-btn" id="browse-view-toggle" title="Toggle List View">
+      ${localStorage.getItem("browseView") === "list"
+        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`
+        : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`
+      }
+    </button>`;
   main.querySelector(".browse-filters")!.after(advanced);
+
+  const toggleBtn = advanced.querySelector("#browse-view-toggle")!;
+  toggleBtn.addEventListener("click", () => {
+    let currentView = contentDiv.getAttribute("data-view") || "grid";
+    currentView = currentView === "grid" ? "list" : "grid";
+    localStorage.setItem("browseView", currentView);
+    contentDiv.setAttribute("data-view", currentView);
+    const ICON_GRID = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`;
+    const ICON_LIST = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+    toggleBtn.innerHTML = currentView === "grid" ? ICON_LIST : ICON_GRID;
+  });
 
   const titleFilter  = advanced.querySelector<HTMLInputElement>("#browse-title-filter")!;
   const yearFilter   = advanced.querySelector<HTMLSelectElement>("#browse-year-filter")!;
@@ -100,7 +117,18 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
     const score = media.averageScore;
     const format = media.format?.replace("_", " ") ?? "Anime";
     const episodes = media.episodes ? `${media.episodes} eps` : "Coming soon";
-    card.innerHTML = `<img src="${media.coverImage.large || media.coverImage.medium}" alt="${title}" loading="lazy" onerror="this.style.opacity=0.3" /><div class="browse-card-overlay"><div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${score}%</span>` : ""}<span>${format}</span></div><span class="browse-card-title">${title}</span><span class="browse-card-year">${episodes}${media.seasonYear ? ` · ${media.seasonYear}` : ""}</span></div>`;
+    card.innerHTML = `
+      <img src="${media.coverImage.large || media.coverImage.medium}" alt="${title}" loading="lazy" onerror="this.style.opacity=0.3" />
+      <div class="browse-card-overlay">
+        <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${score}%</span>` : ""}<span>${format}</span></div>
+        <span class="browse-card-title">${title}</span>
+        <span class="browse-card-year">${episodes}${media.seasonYear ? ` · ${media.seasonYear}` : ""}</span>
+      </div>
+      <div class="browse-card-list-info">
+        <span class="browse-card-title">${title}</span>
+        <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${score}%</span>` : ""}<span>${format}</span><span>${episodes}${media.seasonYear ? ` · ${media.seasonYear}` : ""}</span></div>
+      </div>
+    `;
     card.addEventListener("click", async () => {
       document.getElementById("btn-browse")!.classList.remove("active");
       state.currentTab = "trending";

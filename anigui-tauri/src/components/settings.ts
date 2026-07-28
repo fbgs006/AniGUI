@@ -83,7 +83,7 @@ export function wireSettings() {
       if (dir) (document.getElementById("s-dldir") as HTMLInputElement).value = dir;
     } catch { /* dialog plugin not available */ }
   });
-  document.getElementById("login-status")!.addEventListener("click", openSettings);
+  // Note: login-status click is handled in main.ts (opens Profile panel)
   document.getElementById("modal-settings")!.addEventListener("click", (e) => {
     if (e.target === document.getElementById("modal-settings")) {
       document.getElementById("modal-settings")!.classList.remove("open");

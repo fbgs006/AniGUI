@@ -26,9 +26,9 @@
 }
 
 .browse-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 6px 28px; }
-.browse-advanced-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -16px 6px 28px; }
-.browse-advanced-filters input, .browse-advanced-filters select { height: 34px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 10px; background: var(--bg3); color: var(--text); font: 12px inherit; outline: none; }
-.browse-advanced-filters input { width: min(260px, 100%); }
+.browse-advanced-filters { display: flex; align-items: center; gap: 8px; margin: -16px 6px 28px; }
+.browse-advanced-filters input, .browse-advanced-filters select { height: 34px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 10px; background: var(--bg3); color: var(--text); font: 12px inherit; outline: none; flex-shrink: 0; }
+.browse-advanced-filters input { flex: 1; min-width: 140px; max-width: 260px; }
 .browse-advanced-filters input:focus, .browse-advanced-filters select:focus { border-color: var(--accent); }
 .filter-label { margin-right: 4px; color: var(--text3); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
 .genre-filter { border: 1px solid var(--border); border-radius: 999px; padding: 6px 11px; background: var(--bg3); color: var(--text2); font: 600 11px inherit; cursor: pointer; transition: .18s ease; }
@@ -37,6 +37,11 @@
 .genre-multi-hint { color: var(--accent2); font-size: 11px; font-weight: 600; letter-spacing: .3px; padding: 4px 10px; border-radius: 999px; background: rgba(124,92,252,.12); border: 1px solid rgba(124,92,252,.25); }
 .browse-count { color: var(--text3); font-size: 11px; font-weight: 600; }
 .browse-empty { padding: 48px; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--text2); text-align: center; font-size: 13px; }
+
+.browse-view-toggle-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
 
 .browse-loading {
   display: flex;
@@ -117,3 +122,44 @@
 .browse-card-year { font-size: 10px; color: rgba(255,255,255,0.55); }
 
 .browse-grid { display: grid; grid-template-columns: repeat(auto-fill, 130px); gap: 16px; justify-content: center; padding: 10px 0 30px 0; }
+
+.browse-card-list-info { display: none; flex: 1; flex-direction: column; justify-content: center; padding: 0 16px; min-width: 0; }
+
+/* ─── List View Overrides ─────────────────────────────────────────────────── */
+.browse-content[data-view="list"] .browse-scroll {
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: none;
+  max-height: 400px; /* Optional, depending on layout constraints */
+}
+.browse-content[data-view="list"] .browse-grid {
+  grid-template-columns: 1fr;
+  padding: 10px;
+}
+.browse-content[data-view="list"] .browse-card {
+  width: 100%;
+  display: flex;
+  height: 72px;
+  background: var(--bg2);
+}
+.browse-content[data-view="list"] .browse-card img {
+  width: 52px;
+  height: 72px;
+}
+.browse-content[data-view="list"] .browse-card-overlay {
+  display: none;
+}
+.browse-content[data-view="list"] .browse-card-list-info {
+  display: flex;
+}
+.browse-content[data-view="list"] .browse-card-list-info .browse-card-title {
+  color: var(--text);
+  font-size: 13px;
+  -webkit-line-clamp: 1;
+}
+.browse-content[data-view="list"] .browse-card-list-info .browse-card-topline {
+  justify-content: flex-start;
+  gap: 12px;
+  color: var(--text3);
+}

@@ -51,8 +51,8 @@
 }
 
 .progress-bar-mini {
-  height: 3px;
-  border-radius: 2px;
+  height: 4px;
+  border-radius: 4px;
   background: var(--bg4);
   margin-top: 5px;
   overflow: hidden;
@@ -60,8 +60,36 @@
 .progress-bar-mini-fill {
   height: 100%;
   background: linear-gradient(90deg, var(--accent), var(--accent2));
-  border-radius: 2px;
+  border-radius: 4px;
   transition: width 0.3s;
+}
+
+/* ─── Compact View ───────────────────────────────────────────────────────────── */
+
+[data-view="compact"] .sidebar-item {
+  padding: 6px 10px;
+  gap: 8px;
+  border-radius: 4px;
+}
+[data-view="compact"] .item-cover {
+  display: none;
+}
+[data-view="compact"] .item-title {
+  font-size: 11px;
+}
+[data-view="compact"] .item-meta {
+  display: none;
+}
+[data-view="compact"] .item-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+[data-view="compact"] .progress-bar-mini {
+  width: 40px;
+  margin-top: 0;
+  flex-shrink: 0;
 }
 
 .empty-state {

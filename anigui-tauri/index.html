@@ -11,7 +11,15 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="app">
+  <!-- Update Banner -->
+  <div id="update-banner" class="update-banner">
+    <span class="update-icon">🎁</span>
+    <span id="update-version-label" class="update-label">Update available</span>
+    <button id="update-install-btn" class="btn btn-primary btn-sm">Update Now</button>
+    <button id="update-dismiss-btn" class="btn btn-outline btn-sm">Dismiss</button>
+  </div>
+  
+  <div id="app">
 
       <!-- ── Header ─────────────────────────────────────────────────────────── -->
       <header class="header">
@@ -29,8 +37,15 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>Downloads</span>
           </button>
+          <button class="btn-icon btn-browse" id="btn-calendar" title="Airing Calendar" aria-label="Airing Calendar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <span>Calendar</span>
+          </button>
           <button class="btn-icon" id="btn-settings" title="Settings">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          <button class="btn-icon" id="btn-shortcuts" title="Keyboard Shortcuts (?)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
           </button>
           <div class="login-status" id="login-status">
             <span class="dot"></span>
@@ -42,10 +57,13 @@
       <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
       <aside class="sidebar">
         <div class="sidebar-tabs">
-          <button class="tab-btn active" id="tab-trending" data-tab="trending">Trending</button>
-          <button class="tab-btn" id="tab-continue" data-tab="continue">Watching</button>
-          <button class="tab-btn" id="tab-planning" data-tab="planning">Planning</button>
-        </div>
+        <button class="tab-btn" id="tab-trending">Trending</button>
+        <button class="tab-btn" id="tab-continue">Watching</button>
+        <button class="tab-btn" id="tab-planning">Planning</button>
+        <button class="btn-icon" id="sidebar-view-toggle" title="Toggle Compact View" style="width:28px; height:28px; margin-left: auto;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </button>
+      </div>
         <div class="sidebar-list" id="sidebar-list"></div>
       </aside>
 

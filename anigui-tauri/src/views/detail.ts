@@ -125,6 +125,15 @@ export async function downloadEpisode(ep: number) {
   log.innerHTML = "";
   state.downloadLogBuffer = "";
   status.textContent = "Starting download…";
+
+  // Insert indeterminate progress bar above the log
+  const existing = document.querySelector(".download-progress");
+  if (existing) existing.remove();
+  const bar = document.createElement("div");
+  bar.className = "download-progress";
+  bar.innerHTML = '<div class="download-progress-bar"></div>';
+  log.parentElement!.insertBefore(bar, log);
+
   await invoke("start_download", { title, epNum: ep });
 }
 

@@ -45,4 +45,12 @@ export interface Config {
   dub: boolean;
 }
 
+export interface HistoryEntry {
+  animeId: number;
+  animeTitle: string;
+  cover: string;
+  epNum: number;
+  watchedAt: number; // Unix timestamp in seconds
+}
+
 export type TabName = "continue" | "trending" | "search" | "planning" | "downloads";

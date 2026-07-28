@@ -1,0 +1,132 @@
+/* ─── Shortcuts Overlay ──────────────────────────────────────────────────────── */
+
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  z-index: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+.shortcuts-overlay.open {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.shortcuts-modal {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  box-shadow: var(--shadow);
+  transform: scale(0.95) translateY(8px);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  overflow: hidden;
+}
+
+.shortcuts-overlay.open .shortcuts-modal {
+  transform: scale(1) translateY(0);
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.shortcuts-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.shortcuts-title svg { color: var(--accent); }
+
+.shortcuts-close {
+  background: none;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.15s;
+}
+.shortcuts-close:hover { background: var(--bg3); color: var(--text); }
+
+.shortcuts-grid {
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 24px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shortcut-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 26px;
+  padding: 0 7px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text2);
+  letter-spacing: 0.2px;
+  flex-shrink: 0;
+}
+
+.shortcut-key--sm {
+  min-width: 22px;
+  height: 20px;
+  font-size: 10px;
+  padding: 0 5px;
+}
+
+.shortcut-desc {
+  font-size: 12px;
+  color: var(--text3);
+}
+
+.shortcuts-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text3);
+  text-align: center;
+  background: var(--bg3);
+}
+
+/* ─── ? Button active state (overlay open) ──────────────────────────────────── */
+
+#btn-shortcuts.shortcut-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent2);
+}
+#btn-shortcuts.shortcut-active::after {
+  opacity: 1;
+  background: var(--accent2);
+}

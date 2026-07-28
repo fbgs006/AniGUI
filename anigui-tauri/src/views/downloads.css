@@ -1,9 +1,37 @@
 /* ─── Downloads View ────────────────────────────────────────────────────────── */
 
 .downloads-container { padding: 40px; max-width: 1000px; margin: 0 auto; }
-.downloads-empty { text-align: center; margin-top: 100px; color: var(--text2); }
-.downloads-empty h2 { color: var(--text); margin-bottom: 12px; font-size: 24px; font-weight: 600; }
-.downloads-empty p { font-size: 15px; }
+
+.downloads-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.downloads-header h2 { font-weight: 500; }
+.downloads-summary {
+  font-size: 13px;
+  color: var(--text3);
+  font-weight: 600;
+  padding: 4px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.downloads-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  margin-top: 80px;
+  color: var(--text2);
+}
+.downloads-empty svg { color: var(--text3); opacity: 0.5; margin-bottom: 4px; }
+.downloads-empty h2 { color: var(--text); margin-bottom: 4px; font-size: 22px; font-weight: 600; }
+.downloads-empty p { font-size: 14px; line-height: 1.6; max-width: 360px; }
 
 .download-group { margin-bottom: 30px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
 .download-group-title { padding: 18px 24px; font-weight: 700; background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 16px; color: var(--accent); cursor: pointer; transition: opacity 0.2s; }
@@ -30,4 +58,24 @@
   overflow-y: auto;
   line-height: 1.6;
   border: 1px solid var(--border);
+}
+
+/* ─── Download Progress Indicator ─────────────────────────────────────────── */
+.download-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg4);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.download-progress-bar {
+  height: 100%;
+  width: 30%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--green));
+  animation: dl-progress 1.4s ease-in-out infinite;
+}
+@keyframes dl-progress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(440%); }
 }

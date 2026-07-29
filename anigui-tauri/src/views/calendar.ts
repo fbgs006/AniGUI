@@ -2,7 +2,6 @@
 import './calendar.css';
 
 import { invoke } from '@tauri-apps/api/core';
-import { state } from '../state';
 import { toast } from '../components/toast';
 
 // ─── Entry Point ──────────────────────────────────────────────────────────────

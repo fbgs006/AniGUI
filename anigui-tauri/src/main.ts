@@ -19,6 +19,7 @@ import { loadProfile } from "./views/profile";
 // Utilities & Components
 import { wireShortcuts, injectShortcutsOverlay, toggleOverlay } from "./components/shortcuts";
 import { checkForUpdate } from "./components/updater";
+import { checkAniCliVersion } from "./components/anicli-updater";
 
 // Components
 import { toast } from "./components/toast";
@@ -36,6 +37,7 @@ async function init() {
   injectShortcutsOverlay();
   wireShortcuts();
   checkForUpdate();
+  checkAniCliVersion();
 
   // ── Initial tab ─────────────────────────────────────────────────────────────
   // Default to the user's watch list if they're already logged in.

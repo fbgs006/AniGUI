@@ -8,6 +8,10 @@ import { el } from '../utils';
 import { toast } from '../components/toast';
 import { getSeason, getNextSeason, seasonLabel } from '../utils';
 
+// ─── Browse Cache (avoid hammering AniList on every click) ────────────────────
+let browseCache: { rows: { title: string; items: Media[]; tab?: typeof state.currentTab }[]; ts: number } | null = null;
+const BROWSE_CACHE_TTL = 120_000; // 2 minutes
+
 export async function loadBrowse() {
   state.selectedMedia = null;
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
@@ -15,18 +19,38 @@ export async function loadBrowse() {
   document.getElementById("btn-browse")!.classList.add("active");
 
   const main = document.getElementById("main-panel")!;
+
+  // Use cache if fresh
+  if (browseCache && Date.now() - browseCache.ts < BROWSE_CACHE_TTL) {
+    renderBrowse(browseCache.rows);
+    return;
+  }
+
   main.innerHTML = `<div class="browse-loading"><div class="spinner"></div><span>Loading browse…</span></div>`;
 
   const { season, year } = getSeason();
   const { season: nextSeason, year: nextYear } = getNextSeason();
 
   try {
-    const [trending, popular, upcoming, allTime] = await Promise.all([
+    const results = await Promise.allSettled([
       invoke<any>("get_trending", { page: 1 }),
       invoke<any>("get_popular_this_season", { season, year, page: 1 }),
       invoke<any>("get_upcoming_season", { season: nextSeason, year: nextYear, page: 1 }),
       invoke<any>("get_all_time_popular", { page: 1 }),
     ]);
+
+    const extract = (r: PromiseSettledResult<any>, label: string) => {
+      if (r.status === "fulfilled") return r.value;
+      console.warn(`[Browse] ${label} failed:`, r.reason);
+      return null;
+    };
+
+    const [trending, popular, upcoming, allTime] = [
+      extract(results[0], "Trending"),
+      extract(results[1], "Popular"),
+      extract(results[2], "Upcoming"),
+      extract(results[3], "All Time"),
+    ];
 
     const rows: { title: string; items: Media[]; tab?: typeof state.currentTab }[] = [
       { title: "🔥 Trending Now", items: trending?.data?.Page?.media ?? [], tab: "trending" },
@@ -35,9 +59,25 @@ export async function loadBrowse() {
       { title: "🏆 All Time Popular", items: allTime?.data?.Page?.media ?? [] },
     ];
 
+    // Merge with previous cache: keep old data for any section that failed this time
+    if (browseCache) {
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].items.length === 0 && browseCache.rows[i]?.items.length > 0) {
+          rows[i] = browseCache.rows[i];
+        }
+      }
+    }
+
+    browseCache = { rows, ts: Date.now() };
+
     renderBrowse(rows);
   } catch (e: any) {
-    main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load browse: ${e}</p></div>`;
+    // Fall back to cache if available
+    if (browseCache) {
+      renderBrowse(browseCache.rows);
+    } else {
+      main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load browse: ${e}</p></div>`;
+    }
   }
 }
 

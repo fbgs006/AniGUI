@@ -25,6 +25,7 @@ struct AppState {
     config: Mutex<Config>,
     config_path: std::path::PathBuf,
     player_active: Arc<Mutex<bool>>,
+    http: reqwest::Client,
 }
 
 fn get_config_path() -> std::path::PathBuf {
@@ -79,34 +80,83 @@ fn find_bash() -> Option<String> {
 
 // ─── AniList HTTP Helper ──────────────────────────────────────────────────────
 
+/// An empty token is not authentication. Treat it as an anonymous request so
+/// public discovery remains available for users who have not signed in.
+fn usable_anilist_token(token: Option<&str>) -> Option<&str> {
+    token.map(str::trim).filter(|token| !token.is_empty())
+}
+
 async fn anilist_query(
+    client: &reqwest::Client,
     query: &str,
     variables: Value,
     token: Option<&str>,
 ) -> Result<Value, String> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "query": query,
         "variables": variables
     });
 
-    let mut req = client
-        .post(ANILIST_API)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json");
+    let max_retries = 2u32;
+    let mut last_err = String::new();
 
-    if let Some(tok) = token {
-        req = req.header("Authorization", format!("Bearer {}", tok));
+    for attempt in 0..=max_retries {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt as u64)).await;
+        }
+
+        let mut req = client
+            .post(ANILIST_API)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json");
+
+        if let Some(tok) = usable_anilist_token(token) {
+            req = req.header("Authorization", format!("Bearer {}", tok));
+        }
+
+        let resp = match req.json(&body).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        };
+
+        let status = resp.status();
+
+        if status.as_u16() == 429 {
+            last_err = "AniList API: rate limited (429)".to_string();
+            continue;
+        }
+
+        let json: Value = match resp.json().await {
+            Ok(j) => j,
+            Err(e) => {
+                last_err = format!("error decoding response: {}", e);
+                continue;
+            }
+        };
+
+        if let Some(message) = json["errors"]
+            .as_array()
+            .and_then(|errors| errors.first())
+            .and_then(|error| error["message"].as_str())
+        {
+            if message.contains("temporarily disabled") || message.contains("rate limit") {
+                last_err = format!("AniList API: {}", message);
+                continue;
+            }
+            return Err(format!("AniList API: {}", message));
+        }
+        if !status.is_success() {
+            last_err = format!("AniList API returned HTTP {}", status);
+            continue;
+        }
+
+        return Ok(json);
     }
 
-    let resp = req
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let json: Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(json)
+    Err(last_err)
 }
 
 // ─── GraphQL Queries ──────────────────────────────────────────────────────────
@@ -146,7 +196,6 @@ fn advanced_search_query() -> String {
     pageInfo {{ hasNextPage }}
     media(search: $search, genre_in: $genres, seasonYear: $year, season: $season, format: $format, type: ANIME, sort: $sort) {{
       ...mediaFields
-      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -161,7 +210,6 @@ fn search_query() -> String {
     pageInfo {{ hasNextPage }}
     media(search: $search, type: ANIME, sort: SEARCH_MATCH) {{
       ...mediaFields
-      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -176,7 +224,6 @@ fn trending_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, sort: TRENDING_DESC) {{
       ...mediaFields
-      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -230,7 +277,6 @@ fn popular_season_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC) {{
       ...mediaFields
-      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -245,7 +291,6 @@ fn upcoming_season_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC) {{
       ...mediaFields
-      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -260,7 +305,6 @@ fn all_time_popular_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, sort: POPULARITY_DESC) {{
       ...mediaFields
-      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -298,7 +342,6 @@ query ($airingAtGreater: Int, $airingAtLesser: Int, $page: Int) {
         coverImage { medium large }
         episodes averageScore status season seasonYear genres
         description(asHtml: false)
-        mediaListEntry { id progress status }
       }
     }
   }
@@ -391,22 +434,24 @@ fn open_anilist_login() -> bool {
 
 #[tauri::command]
 async fn search_anime(state: State<'_, AppState>, query: String, page: Option<i64>) -> Result<Value, String> {
-    let token = state.config.lock().unwrap().anilist_token.clone();
+    let page = page.unwrap_or(1);
     anilist_query(
+        &state.http,
         &search_query(),
-        serde_json::json!({ "search": query, "page": page.unwrap_or(1) }),
-        token.as_deref(),
+        serde_json::json!({ "search": query, "page": page }),
+        None,
     )
     .await
 }
 
 #[tauri::command]
 async fn get_trending(state: State<'_, AppState>, page: Option<i64>) -> Result<Value, String> {
-    let token = state.config.lock().unwrap().anilist_token.clone();
+    let page = page.unwrap_or(1);
     anilist_query(
+        &state.http,
         &trending_query(),
-        serde_json::json!({ "page": page.unwrap_or(1) }),
-        token.as_deref(),
+        serde_json::json!({ "page": page }),
+        None,
     )
     .await
 }
@@ -416,12 +461,13 @@ async fn get_continue_watching(state: State<'_, AppState>) -> Result<Value, Stri
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in".to_string())?;
 
-    let viewer = anilist_query(VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
+    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
     let user_id = viewer["data"]["Viewer"]["id"]
         .as_i64()
         .ok_or("Could not get user ID")?;
 
     anilist_query(
+        &state.http,
         &current_query(),
         serde_json::json!({ "userId": user_id }),
         Some(&token),
@@ -434,6 +480,7 @@ async fn sync_progress(state: State<'_, AppState>, media_id: i64, ep_num: i64) -
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
     anilist_query(
+        &state.http,
         UPDATE_MUTATION,
         serde_json::json!({ "mediaId": media_id, "progress": ep_num, "status": "CURRENT" }),
         Some(&token),
@@ -452,6 +499,7 @@ async fn update_status(state: State<'_, AppState>, media_id: i64, status: String
 
     let token = token.ok_or("Not logged in")?;
     anilist_query(
+        &state.http,
         UPDATE_STATUS_MUTATION,
         serde_json::json!({ "mediaId": media_id, "status": status }),
         Some(&token),
@@ -602,36 +650,39 @@ async fn get_viewer_info(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
     const Q: &str = r#"query { Viewer { id name avatar { medium } } }"#;
-    anilist_query(Q, serde_json::json!({}), Some(&token)).await
+    anilist_query(&state.http, Q, serde_json::json!({}), Some(&token)).await
 }
 
 #[tauri::command]
 async fn get_popular_this_season(state: State<'_, AppState>, season: String, year: i64, page: Option<i64>) -> Result<Value, String> {
-    let token = state.config.lock().unwrap().anilist_token.clone();
+    let page = page.unwrap_or(1);
     anilist_query(
+        &state.http,
         &popular_season_query(),
-        serde_json::json!({ "season": season, "year": year, "page": page.unwrap_or(1) }),
-        token.as_deref(),
+        serde_json::json!({ "season": season, "year": year, "page": page }),
+        None,
     ).await
 }
 
 #[tauri::command]
 async fn get_upcoming_season(state: State<'_, AppState>, season: String, year: i64, page: Option<i64>) -> Result<Value, String> {
-    let token = state.config.lock().unwrap().anilist_token.clone();
+    let page = page.unwrap_or(1);
     anilist_query(
+        &state.http,
         &upcoming_season_query(),
-        serde_json::json!({ "season": season, "year": year, "page": page.unwrap_or(1) }),
-        token.as_deref(),
+        serde_json::json!({ "season": season, "year": year, "page": page }),
+        None,
     ).await
 }
 
 #[tauri::command]
 async fn get_all_time_popular(state: State<'_, AppState>, page: Option<i64>) -> Result<Value, String> {
-    let token = state.config.lock().unwrap().anilist_token.clone();
+    let page = page.unwrap_or(1);
     anilist_query(
+        &state.http,
         &all_time_popular_query(),
-        serde_json::json!({ "page": page.unwrap_or(1) }),
-        token.as_deref(),
+        serde_json::json!({ "page": page }),
+        None,
     ).await
 }
 
@@ -639,9 +690,10 @@ async fn get_all_time_popular(state: State<'_, AppState>, page: Option<i64>) -> 
 async fn get_planning(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
-    let viewer = anilist_query(VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
+    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
     let user_id = viewer["data"]["Viewer"]["id"].as_i64().ok_or("Could not get user ID")?;
     anilist_query(
+        &state.http,
         &planning_query(),
         serde_json::json!({ "userId": user_id }),
         Some(&token),
@@ -663,6 +715,7 @@ async fn get_airing_schedule(state: State<'_, AppState>, days_ahead: Option<i64>
     let start = now - 3_600;
     let end   = now + days * 86_400;
     anilist_query(
+        &state.http,
         AIRING_SCHEDULE_QUERY,
         serde_json::json!({ "airingAtGreater": start, "airingAtLesser": end, "page": 1 }),
         token.as_deref(),
@@ -675,11 +728,12 @@ async fn get_airing_schedule(state: State<'_, AppState>, days_ahead: Option<i64>
 async fn get_user_stats(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
-    let viewer = anilist_query(VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
+    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
     let user_id = viewer["data"]["Viewer"]["id"]
         .as_i64()
         .ok_or("Could not get user ID")?;
     anilist_query(
+        &state.http,
         USER_STATS_QUERY,
         serde_json::json!({ "userId": user_id }),
         Some(&token),
@@ -743,6 +797,7 @@ async fn advanced_search(
     page: Option<i64>,
 ) -> Result<Value, String> {
     let q = advanced_search_query();
+    let page = page.unwrap_or(1);
     let mut vars = serde_json::Map::new();
     if let Some(s) = search { if !s.is_empty() { vars.insert("search".to_string(), serde_json::json!(s)); } }
     if let Some(g) = genres { if !g.is_empty() { vars.insert("genres".to_string(), serde_json::json!(g)); } }
@@ -751,10 +806,9 @@ async fn advanced_search(
     if let Some(f) = format { if !f.is_empty() { vars.insert("format".to_string(), serde_json::json!(f)); } }
     let sort_val = sort.unwrap_or_else(|| vec!["TRENDING_DESC".to_string()]);
     vars.insert("sort".to_string(), serde_json::json!(sort_val));
-    vars.insert("page".to_string(), serde_json::json!(page.unwrap_or(1)));
+    vars.insert("page".to_string(), serde_json::json!(page));
 
-    let token = state.config.lock().unwrap().anilist_token.clone();
-    anilist_query(&q, serde_json::json!(vars), token.as_deref()).await
+    anilist_query(&state.http, &q, serde_json::json!(vars), None).await
 }
 
 #[tauri::command]
@@ -836,6 +890,219 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         app.restart();
     }
     Ok(())
+}
+
+// ─── Ani-CLI Version Check ──────────────────────────────────────────────────────
+
+/// Parses the numeric part of an ani-cli version for safe comparison.
+///
+/// GitHub tags can omit trailing zeroes (`v5.1`) while local builds may include
+/// a patch component (`5.1.1`). Missing numeric components compare as zero.
+/// Unknown version formats return `None` so that the UI never falsely claims an
+/// update is available.
+fn parse_anicli_version(version: &str) -> Option<Vec<u64>> {
+    let numeric_part = version.trim().trim_start_matches(['v', 'V']);
+    let numeric_part = numeric_part.split(['-', '+']).next().unwrap_or_default();
+
+    let parts: Option<Vec<u64>> = numeric_part
+        .split('.')
+        .map(|part| {
+            (!part.is_empty())
+                .then(|| part.parse::<u64>().ok())
+                .flatten()
+        })
+        .collect();
+
+    match parts {
+        Some(parts) if !parts.is_empty() => Some(parts),
+        _ => None,
+    }
+}
+
+/// Returns true only when `candidate` is strictly newer than `installed`.
+fn anicli_update_available(installed: &str, candidate: &str) -> bool {
+    let (Some(installed), Some(candidate)) = (
+        parse_anicli_version(installed),
+        parse_anicli_version(candidate),
+    ) else {
+        return false;
+    };
+
+    let component_count = installed.len().max(candidate.len());
+    for index in 0..component_count {
+        let local = installed.get(index).copied().unwrap_or(0);
+        let latest = candidate.get(index).copied().unwrap_or(0);
+        match latest.cmp(&local) {
+            std::cmp::Ordering::Greater => return true,
+            std::cmp::Ordering::Less => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
+    false
+}
+
+#[tauri::command]
+async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let bash = cfg.bash_path.clone().or_else(find_bash);
+
+    let Some(bash_path) = bash else {
+        return Err("bash not found".to_string());
+    };
+
+    // Get local ani-cli version
+    let local_output = std::process::Command::new(&bash_path)
+        .args(["-lc", "ani-cli -V 2>/dev/null || echo 'not-installed'"])
+        .output()
+        .map_err(|e| format!("Failed to run ani-cli: {}", e))?;
+
+    let local_raw = String::from_utf8_lossy(&local_output.stdout)
+        .trim()
+        .to_string();
+
+    // ani-cli -V typically prints something like "ani-cli 4.9" or just "4.9"
+    let local_version = local_raw
+        .replace("ani-cli", "")
+        .replace('v', "")
+        .trim()
+        .to_string();
+
+    if local_version.is_empty() || local_version == "not-installed" {
+        return Ok(serde_json::json!({
+            "installed": false,
+            "local_version": null,
+            "latest_version": null,
+            "update_available": false
+        }));
+    }
+
+    // Fetch latest release from GitHub
+    let client = reqwest::Client::builder()
+        .user_agent("AniGUI")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let latest = match client
+        .get("https://api.github.com/repos/pystardust/ani-cli/releases/latest")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if let Ok(json) = resp.json::<Value>().await {
+                json["tag_name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .replace('v', "")
+                    .to_string()
+            } else {
+                String::new()
+            }
+        }
+        Err(_) => String::new(),
+    };
+
+    if latest.is_empty() {
+        // Can't determine latest — don't nag the user
+        return Ok(serde_json::json!({
+            "installed": true,
+            "local_version": local_version,
+            "latest_version": null,
+            "update_available": false
+        }));
+    }
+
+    // A different string is not necessarily a newer release: for example a
+    // local 5.1.1 build is already ahead of GitHub's v5.1 tag.
+    let update_available = anicli_update_available(&local_version, &latest);
+
+    Ok(serde_json::json!({
+        "installed": true,
+        "local_version": local_version,
+        "latest_version": latest,
+        "update_available": update_available
+    }))
+}
+
+#[cfg(test)]
+mod backend_helper_tests {
+    use super::{
+        advanced_search_query, all_time_popular_query, anicli_update_available,
+        popular_season_query, search_query, trending_query, upcoming_season_query,
+        usable_anilist_token, AIRING_SCHEDULE_QUERY,
+    };
+
+    #[test]
+    fn does_not_offer_an_older_release_as_an_update() {
+        assert!(!anicli_update_available("5.1.1", "5.1"));
+    }
+
+    #[test]
+    fn recognises_a_strictly_newer_release() {
+        assert!(anicli_update_available("5.0", "v5.1"));
+    }
+
+    #[test]
+    fn treats_missing_trailing_components_as_zero() {
+        assert!(!anicli_update_available("5.1", "5.1.0"));
+    }
+
+    #[test]
+    fn ignores_unparseable_versions() {
+        assert!(!anicli_update_available("5.1", "latest"));
+    }
+
+    #[test]
+    fn treats_blank_anilist_tokens_as_anonymous_requests() {
+        assert_eq!(usable_anilist_token(Some("   ")), None);
+        assert_eq!(usable_anilist_token(None), None);
+        assert_eq!(usable_anilist_token(Some(" token ")), Some("token"));
+    }
+
+    #[test]
+    fn public_discovery_queries_do_not_request_user_list_data() {
+        let public_queries = [
+            advanced_search_query(),
+            all_time_popular_query(),
+            popular_season_query(),
+            search_query(),
+            trending_query(),
+            upcoming_season_query(),
+            AIRING_SCHEDULE_QUERY.to_string(),
+        ];
+
+        for query in public_queries {
+            assert!(!query.contains("mediaListEntry"));
+        }
+    }
+}
+
+#[tauri::command]
+async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Value, String> {
+    let cfg = state.config.lock().unwrap().clone();
+    let bash = cfg.bash_path.clone().or_else(find_bash);
+
+    let Some(bash_path) = bash else {
+        return Err("bash not found".to_string());
+    };
+
+    let output = std::process::Command::new(&bash_path)
+        .args(["-lc", "ani-cli -U 2>&1"])
+        .output()
+        .map_err(|e| format!("Failed to update ani-cli: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let success = output.status.success();
+
+    // Emit an event so the frontend can react
+    let _ = app.emit("anicli_updated", serde_json::json!({ "success": success }));
+
+    Ok(serde_json::json!({
+        "success": success,
+        "output": stdout,
+        "stderr": stderr
+    }))
 }
 
 // ─── MPV Script Installation ────────────────────────────────────────────────────
@@ -964,6 +1231,11 @@ pub fn run() {
             config: Mutex::new(config),
             config_path,
             player_active: Arc::new(Mutex::new(false)),
+            http: reqwest::Client::builder()
+                .user_agent("AniGUI/1.3.0")
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -992,6 +1264,8 @@ pub fn run() {
             clear_history,
             check_for_update,
             install_update,
+            check_anicli_version,
+            update_anicli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

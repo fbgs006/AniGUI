@@ -196,6 +196,7 @@ fn advanced_search_query() -> String {
     pageInfo {{ hasNextPage }}
     media(search: $search, genre_in: $genres, seasonYear: $year, season: $season, format: $format, type: ANIME, sort: $sort) {{
       ...mediaFields
+      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -210,6 +211,7 @@ fn search_query() -> String {
     pageInfo {{ hasNextPage }}
     media(search: $search, type: ANIME, sort: SEARCH_MATCH) {{
       ...mediaFields
+      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -224,6 +226,7 @@ fn trending_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, sort: TRENDING_DESC) {{
       ...mediaFields
+      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -277,6 +280,7 @@ fn popular_season_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC) {{
       ...mediaFields
+      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -291,6 +295,7 @@ fn upcoming_season_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC) {{
       ...mediaFields
+      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -305,6 +310,7 @@ fn all_time_popular_query() -> String {
     pageInfo {{ hasNextPage }}
     media(type: ANIME, sort: POPULARITY_DESC) {{
       ...mediaFields
+      mediaListEntry {{ id progress status }}
     }}
   }}
 }}"#,
@@ -342,6 +348,7 @@ query ($airingAtGreater: Int, $airingAtLesser: Int, $page: Int) {
         coverImage { medium large }
         episodes averageScore status season seasonYear genres
         description(asHtml: false)
+        mediaListEntry { id progress status }
       }
     }
   }
@@ -435,11 +442,12 @@ fn open_anilist_login() -> bool {
 #[tauri::command]
 async fn search_anime(state: State<'_, AppState>, query: String, page: Option<i64>) -> Result<Value, String> {
     let page = page.unwrap_or(1);
+    let token = state.config.lock().unwrap().anilist_token.clone();
     anilist_query(
         &state.http,
         &search_query(),
         serde_json::json!({ "search": query, "page": page }),
-        None,
+        token.as_deref(),
     )
     .await
 }
@@ -447,11 +455,12 @@ async fn search_anime(state: State<'_, AppState>, query: String, page: Option<i6
 #[tauri::command]
 async fn get_trending(state: State<'_, AppState>, page: Option<i64>) -> Result<Value, String> {
     let page = page.unwrap_or(1);
+    let token = state.config.lock().unwrap().anilist_token.clone();
     anilist_query(
         &state.http,
         &trending_query(),
         serde_json::json!({ "page": page }),
-        None,
+        token.as_deref(),
     )
     .await
 }
@@ -656,33 +665,36 @@ async fn get_viewer_info(state: State<'_, AppState>) -> Result<Value, String> {
 #[tauri::command]
 async fn get_popular_this_season(state: State<'_, AppState>, season: String, year: i64, page: Option<i64>) -> Result<Value, String> {
     let page = page.unwrap_or(1);
+    let token = state.config.lock().unwrap().anilist_token.clone();
     anilist_query(
         &state.http,
         &popular_season_query(),
         serde_json::json!({ "season": season, "year": year, "page": page }),
-        None,
+        token.as_deref(),
     ).await
 }
 
 #[tauri::command]
 async fn get_upcoming_season(state: State<'_, AppState>, season: String, year: i64, page: Option<i64>) -> Result<Value, String> {
     let page = page.unwrap_or(1);
+    let token = state.config.lock().unwrap().anilist_token.clone();
     anilist_query(
         &state.http,
         &upcoming_season_query(),
         serde_json::json!({ "season": season, "year": year, "page": page }),
-        None,
+        token.as_deref(),
     ).await
 }
 
 #[tauri::command]
 async fn get_all_time_popular(state: State<'_, AppState>, page: Option<i64>) -> Result<Value, String> {
     let page = page.unwrap_or(1);
+    let token = state.config.lock().unwrap().anilist_token.clone();
     anilist_query(
         &state.http,
         &all_time_popular_query(),
         serde_json::json!({ "page": page }),
-        None,
+        token.as_deref(),
     ).await
 }
 
@@ -808,7 +820,8 @@ async fn advanced_search(
     vars.insert("sort".to_string(), serde_json::json!(sort_val));
     vars.insert("page".to_string(), serde_json::json!(page));
 
-    anilist_query(&state.http, &q, serde_json::json!(vars), None).await
+    let token = state.config.lock().unwrap().anilist_token.clone();
+    anilist_query(&state.http, &q, serde_json::json!(vars), token.as_deref()).await
 }
 
 #[tauri::command]
@@ -977,13 +990,9 @@ async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, Strin
         }));
     }
 
-    // Fetch latest release from GitHub
-    let client = reqwest::Client::builder()
-        .user_agent("AniGUI")
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let latest = match client
+    // Fetch latest release from GitHub, reusing the shared timeout-bounded client.
+    let latest = match state
+        .http
         .get("https://api.github.com/repos/pystardust/ani-cli/releases/latest")
         .send()
         .await
@@ -1060,8 +1069,11 @@ mod backend_helper_tests {
     }
 
     #[test]
-    fn public_discovery_queries_do_not_request_user_list_data() {
-        let public_queries = [
+    fn discovery_queries_request_viewer_progress_when_logged_in() {
+        // AniList returns `mediaListEntry` as null for anonymous requests, so
+        // requesting it is safe for logged-out users while still letting
+        // logged-in users see their real progress on Browse/Search results.
+        let queries = [
             advanced_search_query(),
             all_time_popular_query(),
             popular_season_query(),
@@ -1071,8 +1083,8 @@ mod backend_helper_tests {
             AIRING_SCHEDULE_QUERY.to_string(),
         ];
 
-        for query in public_queries {
-            assert!(!query.contains("mediaListEntry"));
+        for query in queries {
+            assert!(query.contains("mediaListEntry"));
         }
     }
 }

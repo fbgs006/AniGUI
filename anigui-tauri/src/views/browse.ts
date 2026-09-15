@@ -58,11 +58,13 @@ export async function loadBrowse() {
       { title: `🗓 Upcoming — ${seasonLabel(nextSeason)} ${nextYear}`, items: upcoming?.data?.Page?.media ?? [] },
       { title: "🏆 All Time Popular", items: allTime?.data?.Page?.media ?? [] },
     ];
+    const failed = [trending, popular, upcoming, allTime].map(v => v === null);
 
-    // Merge with previous cache: keep old data for any section that failed this time
+    // Merge with previous cache: keep old data only for sections that actually
+    // failed this time — a section that genuinely came back empty stays empty.
     if (browseCache) {
       for (let i = 0; i < rows.length; i++) {
-        if (rows[i].items.length === 0 && browseCache.rows[i]?.items.length > 0) {
+        if (failed[i] && browseCache.rows[i]?.items.length > 0) {
           rows[i] = browseCache.rows[i];
         }
       }

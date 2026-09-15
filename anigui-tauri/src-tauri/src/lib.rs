@@ -4,13 +4,15 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
 
+mod bootstrap;
+
 const ANILIST_API: &str = "https://graphql.anilist.co";
 const ANILIST_CLIENT_ID: &str = "45898";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct Config {
+pub(crate) struct Config {
     bash_path: Option<String>,
     quality: Option<String>,
     confirm_before_sync: Option<bool>,
@@ -19,13 +21,14 @@ struct Config {
     theme: Option<String>,
     auto_sync: Option<bool>,
     dub: Option<bool>,
+    pub(crate) skip_auto_setup: Option<bool>,
 }
 
-struct AppState {
-    config: Mutex<Config>,
-    config_path: std::path::PathBuf,
+pub(crate) struct AppState {
+    pub(crate) config: Mutex<Config>,
+    pub(crate) config_path: std::path::PathBuf,
     player_active: Arc<Mutex<bool>>,
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
 }
 
 fn get_config_path() -> std::path::PathBuf {
@@ -63,6 +66,11 @@ fn save_config_to_disk(path: &std::path::Path, cfg: &Config) {
 }
 
 fn find_bash() -> Option<String> {
+    let bundled = bootstrap::bundled_bash_path();
+    if bundled.exists() {
+        return Some(bundled.to_string_lossy().to_string());
+    }
+
     let candidates = [
         which::which("bash").ok().map(|p| p.to_string_lossy().to_string()),
         Some(r"C:\Program Files\Git\bin\bash.exe".to_string()),
@@ -76,6 +84,20 @@ fn find_bash() -> Option<String> {
         }
     }
     None
+}
+
+/// Wraps `Command::new(bash_path)`, augmenting the child process's PATH with
+/// the bundled runtime's directories when `bash_path` is our own bundled
+/// bash — so `ani-cli` (invoked by bare name in the shell command string)
+/// can resolve `mpv`/`fzf`/`curl`/`grep`/`sed` without any of them being on
+/// the *system* PATH. A user-set `bash_path` override is left untouched.
+fn spawn_bash_command(bash_path: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bash_path);
+    if bootstrap::is_bundled_bash(bash_path) {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", bootstrap::build_augmented_path(&existing));
+    }
+    cmd
 }
 
 // ─── AniList HTTP Helper ──────────────────────────────────────────────────────
@@ -389,7 +411,8 @@ fn get_config(state: State<AppState>) -> Value {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string()
-        })
+        }),
+        "skip_auto_setup": cfg.skip_auto_setup.unwrap_or(false)
     })
 }
 
@@ -547,7 +570,7 @@ fn play_episode(state: State<AppState>, app: AppHandle, title: String, ep_num: i
                 let _ = window.minimize();
             }
         });
-        let _ = std::process::Command::new(&bash_path)
+        let _ = spawn_bash_command(&bash_path)
             .args(["-lc", &cmd])
             .status();
 
@@ -617,7 +640,7 @@ fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_num:
             download_dir, safe_title, ep_num, quality, dub_flag
         );
 
-        let mut child = match std::process::Command::new(&bash_path)
+        let mut child = match spawn_bash_command(&bash_path)
             .args(["-lc", &cmd])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -960,7 +983,7 @@ async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, Strin
     };
 
     // Get local ani-cli version
-    let local_output = std::process::Command::new(&bash_path)
+    let local_output = spawn_bash_command(&bash_path)
         .args(["-lc", "ani-cli -V 2>/dev/null || echo 'not-installed'"])
         .output()
         .map_err(|e| format!("Failed to run ani-cli: {}", e))?;
@@ -1093,7 +1116,17 @@ async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Val
         return Err("bash not found".to_string());
     };
 
-    let output = std::process::Command::new(&bash_path)
+    // The bundled ani-cli is a raw script, not a git checkout, so its own
+    // `-U` self-updater has nothing to pull — re-fetch it pinned to the
+    // latest release tag instead, and keep runtime/version.json in sync.
+    if bootstrap::is_bundled_bash(&bash_path) {
+        let result = bootstrap::reinstall_anicli_only(&state.http).await;
+        let success = result.is_ok();
+        let _ = app.emit("anicli_updated", serde_json::json!({ "success": success }));
+        return result;
+    }
+
+    let output = spawn_bash_command(&bash_path)
         .args(["-lc", "ani-cli -U 2>&1"])
         .output()
         .map_err(|e| format!("Failed to update ani-cli: {}", e))?;
@@ -1112,120 +1145,11 @@ async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Val
     }))
 }
 
-// ─── MPV Script Installation ────────────────────────────────────────────────────
-
-fn get_mpv_scripts_dir() -> Option<std::path::PathBuf> {
-    let mut script_dir = None;
-    if let Ok(path) = which::which("mpv") {
-        if let Some(parent) = path.parent() {
-            let portable = parent.join("portable_config");
-            if portable.exists() {
-                script_dir = Some(portable.join("scripts"));
-            }
-        }
-    }
-    
-    if script_dir.is_none() {
-        if let Some(mut path) = dirs_next::data_dir() {
-            path.push("mpv");
-            path.push("scripts");
-            script_dir = Some(path);
-        }
-    }
-    script_dir
-}
-
-fn install_mpv_script() {
-    if let Some(path) = get_mpv_scripts_dir() {
-        let _ = std::fs::create_dir_all(&path);
-        let script_path = path.join("anigui-tracker.lua");
-        
-        let script_content = r#"
-local mp = require 'mp'
-local utils = require 'mp.utils'
-local msg = require 'mp.msg'
-
-local appdata = os.getenv("APPDATA")
-if not appdata then return end
-
-local anigui_dir = appdata .. "/AniGUI"
--- Ensure directory exists. Wrap in pcall so sandboxed mpv builds (e.g. Scoop)
--- that block os.execute don't crash the entire script on startup.
-pcall(function() os.execute('mkdir "' .. anigui_dir .. '" >nul 2>&1') end)
-local timestamps_file = anigui_dir .. "/timestamps.json"
-local last_watched_file = anigui_dir .. "/last_watched.json"
-
-local function read_json()
-    local f = io.open(timestamps_file, "r")
-    if not f then return {} end
-    local content = f:read("*all")
-    f:close()
-    if not content or content == "" then return {} end
-    local data, err = utils.parse_json(content)
-    if not data then return {} end
-    return data
-end
-
-local function write_json(data)
-    local f = io.open(timestamps_file, "w")
-    if not f then return end
-    f:write(utils.format_json(data))
-    f:close()
-end
-
-mp.register_event("file-loaded", function()
-    local title = mp.get_property("media-title")
-    if not title then return end
-    
-    local data = read_json()
-    if data[title] then
-        local time = data[title]
-        mp.commandv("seek", tostring(time), "absolute")
-        mp.osd_message("AniGUI: Resumed at " .. tostring(math.floor(time)) .. "s")
-    end
-end)
-
-mp.add_periodic_timer(5, function()
-    local title = mp.get_property("media-title")
-    local time = mp.get_property_number("time-pos")
-    local duration = mp.get_property_number("duration")
-    
-    if title and time and duration then
-        if time > 10 and (duration - time) > 10 then
-            local data = read_json()
-            data[title] = time
-            write_json(data)
-        elseif (duration - time) <= 10 then
-            local data = read_json()
-            if data[title] then
-                data[title] = nil
-                write_json(data)
-            end
-        end
-        
-        -- Track the last played stats so the backend knows if the episode was finished.
-        local stats = {
-            percent = time / duration,
-            duration = duration,
-            time = time
-        }
-        local stats_file = io.open(last_watched_file, "w")
-        if stats_file then
-            stats_file:write(utils.format_json(stats))
-            stats_file:close()
-        end
-    end
-end)
-"#;
-        let _ = std::fs::write(script_path, script_content);
-    }
-}
-
 // ─── App Entry ────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    install_mpv_script();
+    bootstrap::install_mpv_script();
     let config_path = get_config_path();
     let config = load_config_from_disk(&config_path);
 
@@ -1273,6 +1197,9 @@ pub fn run() {
             install_update,
             check_anicli_version,
             update_anicli,
+            bootstrap::check_runtime_status,
+            bootstrap::install_runtime,
+            bootstrap::skip_runtime_setup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

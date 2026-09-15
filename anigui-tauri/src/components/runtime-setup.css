@@ -1,0 +1,46 @@
+/* ─── Runtime Setup Modal ─────────────────────────────────────────────────── */
+
+.runtime-setup-intro {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.6;
+  margin: 0 0 4px;
+}
+
+.runtime-row { display: flex; flex-direction: column; gap: 6px; }
+.runtime-row-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.runtime-row-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.runtime-row-status { font-size: 12px; color: var(--text3); text-align: right; }
+.runtime-row.done .runtime-row-status { color: var(--green); }
+.runtime-row.error .runtime-row-status { color: var(--red); }
+
+.runtime-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg4);
+  overflow: hidden;
+}
+.runtime-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--green));
+  transition: width 0.15s linear;
+}
+.runtime-progress-fill.indeterminate {
+  width: 30%;
+  animation: runtime-indeterminate 1.4s ease-in-out infinite;
+}
+.runtime-row.done .runtime-progress-fill { width: 100% !important; }
+.runtime-row.error .runtime-progress-fill { background: var(--red); width: 100% !important; animation: none; }
+
+@keyframes runtime-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(440%); }
+}
+
+.runtime-status-line {
+  font-size: 12px;
+  color: var(--text3);
+}
+.runtime-status-line.bundled { color: var(--green); }

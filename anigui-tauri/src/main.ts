@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Config } from "./types";
+import type { Config, RuntimeInstallProgress, RuntimeStatus } from "./types";
 import { state } from "./state";
 import { el } from "./utils";
 
@@ -25,6 +25,7 @@ import { checkAniCliVersion } from "./components/anicli-updater";
 import { toast } from "./components/toast";
 import { wireSyncBar, showSyncBar } from "./components/sync-bar";
 import { wireSettings, updateLoginStatus, fetchViewerName } from "./components/settings";
+import { openRuntimeSetup, wireRuntimeSetup, handleRuntimeProgress } from "./components/runtime-setup";
 
 async function init() {
   // ── Config ──────────────────────────────────────────────────────────────────
@@ -32,6 +33,15 @@ async function init() {
   document.body.setAttribute("data-theme", state.config.theme);
   updateLoginStatus();
   fetchViewerName(); // non-blocking
+
+  // ── Runtime setup (ani-cli / mpv / fzf / Git Bash bootstrap) ─────────────────
+  wireRuntimeSetup();
+  try {
+    const runtimeStatus = await invoke<RuntimeStatus>("check_runtime_status");
+    if (!runtimeStatus.all_present && !runtimeStatus.system_fallback_present && !runtimeStatus.skip_auto_setup) {
+      openRuntimeSetup(runtimeStatus);
+    }
+  } catch { /* non-critical — Settings still offers a manual bash_path override */ }
 
   // ── Inject & wire global components ──────────────────────────────────────────
   injectShortcutsOverlay();
@@ -91,6 +101,10 @@ async function init() {
   wireSyncBar();
 
   // ── Tauri Events ─────────────────────────────────────────────────────────────
+
+  await listen("runtime_install_progress", (event: any) => {
+    handleRuntimeProgress(event.payload as RuntimeInstallProgress);
+  });
 
   await listen("player_closed", () => {
     state.playLaunching = false;

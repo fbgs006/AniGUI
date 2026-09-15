@@ -43,6 +43,28 @@ export interface Config {
   theme: string;
   auto_sync: boolean;
   dub: boolean;
+  skip_auto_setup: boolean;
+}
+
+export interface RuntimeStatus {
+  bash_present: boolean;
+  mpv_present: boolean;
+  fzf_present: boolean;
+  anicli_present: boolean;
+  all_present: boolean;
+  system_fallback_present: boolean;
+  skip_auto_setup: boolean;
+}
+
+export type RuntimeComponent = "git-bash" | "mpv" | "fzf" | "ani-cli";
+export type RuntimeInstallPhase = "downloading" | "extracting" | "installing" | "done" | "error";
+
+export interface RuntimeInstallProgress {
+  component: RuntimeComponent;
+  phase: RuntimeInstallPhase;
+  bytes: number;
+  total: number;
+  message: string;
 }
 
 export interface HistoryEntry {

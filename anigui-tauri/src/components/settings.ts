@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { state } from '../state';
 import { toast } from './toast';
+import { repairRuntime } from './runtime-setup';
+import type { RuntimeStatus } from '../types';
 
 export function openSettings() {
   (document.getElementById("s-token") as HTMLInputElement).value = state.config.anilist_token || "";
@@ -14,6 +16,27 @@ export function openSettings() {
   (document.getElementById("s-autosync") as HTMLInputElement).checked = state.config.auto_sync || false;
   (document.getElementById("s-dub") as HTMLInputElement).checked = state.config.dub || false;
   document.getElementById("modal-settings")!.classList.add("open");
+  refreshRuntimeStatusLine();
+}
+
+async function refreshRuntimeStatusLine() {
+  const label = document.getElementById("s-runtime-status");
+  if (!label) return;
+  label.textContent = "Checking…";
+  label.classList.remove("bundled");
+  try {
+    const status = await invoke<RuntimeStatus>("check_runtime_status");
+    if (status.all_present) {
+      label.textContent = "Using AniGUI's bundled runtime";
+      label.classList.add("bundled");
+    } else if (status.system_fallback_present) {
+      label.textContent = "Using system-installed ani-cli / mpv";
+    } else {
+      label.textContent = "Not installed yet";
+    }
+  } catch {
+    label.textContent = "Unknown";
+  }
 }
 
 export async function saveSettings() {
@@ -82,6 +105,11 @@ export function wireSettings() {
       const dir = await dialogOpen({ directory: true, multiple: false }) as string | null;
       if (dir) (document.getElementById("s-dldir") as HTMLInputElement).value = dir;
     } catch { /* dialog plugin not available */ }
+  });
+  document.getElementById("s-repair-runtime")!.addEventListener("click", async () => {
+    document.getElementById("modal-settings")!.classList.remove("open");
+    await repairRuntime();
+    refreshRuntimeStatusLine();
   });
   // Note: login-status click is handled in main.ts (opens Profile panel)
   document.getElementById("modal-settings")!.addEventListener("click", (e) => {

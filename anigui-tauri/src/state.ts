@@ -13,6 +13,7 @@ export const state = {
     download_dir: "",
     theme: "purple",
     auto_sync: false,
+    skip_auto_setup: false,
   } as Config,
 
   currentTab: "trending" as TabName,

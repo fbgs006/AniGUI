@@ -268,11 +268,6 @@ mutation ($mediaId: Int, $status: MediaListStatus) {
   }
 }"#;
 
-const DELETE_MUTATION: &str = r#"
-mutation ($id: Int) {
-  DeleteMediaListEntry(id: $id) { deleted }
-}"#;
-
 fn popular_season_query() -> String {
     format!(
         r#"{} query ($season: MediaSeason, $year: Int, $page: Int) {{

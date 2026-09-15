@@ -1163,7 +1163,7 @@ pub fn run() {
             config_path,
             player_active: Arc::new(Mutex::new(false)),
             http: reqwest::Client::builder()
-                .user_agent("AniGUI/1.3.0")
+                .user_agent("AniGUI/1.4.0")
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),

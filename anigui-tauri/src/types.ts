@@ -17,6 +17,12 @@ export interface RelationEdge {
   node: RelatedNode;
 }
 
+export interface NextAiringEpisode {
+  airingAt: number; // unix seconds
+  episode: number;
+  timeUntilAiring: number; // seconds from now
+}
+
 export interface Media {
   id: number;
   idMal?: number;
@@ -32,6 +38,7 @@ export interface Media {
   coverImage: CoverImage;
   mediaListEntry?: MediaListEntry;
   relations?: { edges: RelationEdge[] };
+  nextAiringEpisode?: NextAiringEpisode;
 }
 
 export interface Config {

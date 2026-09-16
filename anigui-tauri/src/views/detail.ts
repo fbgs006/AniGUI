@@ -4,7 +4,7 @@ import './detail.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media } from '../types';
-import { $, el } from '../utils';
+import { $, el, formatCountdown } from '../utils';
 import { toast } from '../components/toast';
 
 // ─── Relations Helpers ────────────────────────────────────────────────────────
@@ -213,6 +213,9 @@ export function renderDetail() {
           ${m.genres.slice(0, 4).map(g => `<span class="genre-pill">${g}</span>`).join("")}
           ${m.averageScore ? `<span class="score-badge">★ ${m.averageScore}%</span>` : ""}
           ${m.season ? `<span class="season-badge">${m.season} ${m.seasonYear ?? ""}</span>` : ""}
+          ${m.status === "RELEASING" && m.nextAiringEpisode
+            ? `<span class="airing-badge">EP ${m.nextAiringEpisode.episode} airing in ${formatCountdown(m.nextAiringEpisode.timeUntilAiring)}</span>`
+            : ""}
         </div>
         ${m.description ? `<p class="detail-desc">${m.description.replace(/<[^>]*>/g, "").trim()}</p>` : ""}
         ${eps ? `

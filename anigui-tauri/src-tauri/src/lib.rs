@@ -196,6 +196,7 @@ fragment mediaFields on Media {
   genres
   description(asHtml: false)
   coverImage { medium large }
+  nextAiringEpisode { airingAt episode timeUntilAiring }
   relations {
     edges {
       relationType
@@ -1056,7 +1057,7 @@ mod backend_helper_tests {
     use super::{
         advanced_search_query, all_time_popular_query, anicli_update_available,
         popular_season_query, search_query, trending_query, upcoming_season_query,
-        usable_anilist_token, AIRING_SCHEDULE_QUERY,
+        usable_anilist_token, AIRING_SCHEDULE_QUERY, MEDIA_FIELDS,
     };
 
     #[test]
@@ -1104,6 +1105,13 @@ mod backend_helper_tests {
         for query in queries {
             assert!(query.contains("mediaListEntry"));
         }
+    }
+
+    #[test]
+    fn media_fields_fragment_requests_next_airing_episode() {
+        // Powers the "next episode airs in..." line on the detail page for
+        // RELEASING shows — every query built on the shared fragment gets it.
+        assert!(MEDIA_FIELDS.contains("nextAiringEpisode"));
     }
 }
 

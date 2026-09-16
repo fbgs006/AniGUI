@@ -18,15 +18,39 @@ Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episod
 
 ## 🚀 Installation
 
-No prerequisites — just download and run:
+Go to the **[Releases](https://github.com/fbgs006/ani-gui/releases)** tab and grab the build for your platform.
 
-1. Go to the **[Releases](https://github.com/fbgs006/ani-gui/releases)** tab.
-2. Download `AniGUI-setup.exe` (installer) or `AniGUI.exe` (portable — no installation needed).
-3. Run it. On first launch, AniGUI downloads its own private copy of `ani-cli`, `mpv`, `fzf`, and a portable Git Bash into `%APPDATA%\AniGUI\runtime\` (~150-200MB, one time only) — no Scoop, no manual installs, nothing added to your system PATH.
+**Windows — no prerequisites, just download and run:**
+
+1. Download `AniGUI-setup.exe` (installer) or `AniGUI.exe` (portable — no installation needed).
+2. Run it. On first launch, AniGUI downloads its own private copy of `ani-cli`, `mpv`, `fzf`, and a portable Git Bash into `%APPDATA%\AniGUI\runtime\` (~150-200MB, one time only) — no Scoop, no manual installs, nothing added to your system PATH.
 
 Already have `ani-cli`/`mpv`/Git Bash installed and want AniGUI to use those instead? Click **"I already have these installed — skip"** on the setup screen, or set them manually as described below.
 
-### Advanced: manual / Scoop-based setup
+**Linux — install `mpv`/`ani-cli` yourself, then download AniGUI:**
+
+The zero-setup bundled runtime above is Windows-only for now, so grab `mpv` and `ani-cli` from your distro/AUR first (see Prerequisites below), then download the `.AppImage` (portable, works on any distro — `chmod +x` it and run), or the `.deb` (Ubuntu/Debian) / `.rpm` (Fedora) package for a system install.
+
+### 📦 Prerequisites (Linux)
+
+`bash` is already your system shell, so there's nothing extra to configure there — just install `mpv` and `ani-cli`.
+
+**Arch (and Arch-based distros)**
+
+```bash
+sudo pacman -S mpv
+yay -S ani-cli   # or paru, or any AUR helper
+```
+
+**Ubuntu / Debian**
+
+```bash
+sudo apt install mpv
+git clone "https://github.com/pystardust/ani-cli.git"
+sudo install -Dm755 ani-cli/ani-cli /usr/local/bin/ani-cli
+```
+
+### Advanced: manual / Scoop-based setup (Windows)
 
 If you'd rather manage `ani-cli` and `mpv` yourself instead of using AniGUI's bundled runtime:
 

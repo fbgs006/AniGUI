@@ -358,13 +358,30 @@ local mp = require 'mp'
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 
+-- Mirrors the Rust side's dirs_next::data_dir(): %APPDATA% on Windows,
+-- $XDG_DATA_HOME (or ~/.local/share) on Linux.
 local appdata = os.getenv("APPDATA")
-if not appdata then return end
+local anigui_dir
+if appdata then
+    anigui_dir = appdata .. "/AniGUI"
+else
+    local xdg_data = os.getenv("XDG_DATA_HOME")
+    local home = os.getenv("HOME")
+    if xdg_data then
+        anigui_dir = xdg_data .. "/AniGUI"
+    elseif home then
+        anigui_dir = home .. "/.local/share/AniGUI"
+    end
+end
+if not anigui_dir then return end
 
-local anigui_dir = appdata .. "/AniGUI"
 -- Ensure directory exists. Wrap in pcall so sandboxed mpv builds (e.g. Scoop)
 -- that block os.execute don't crash the entire script on startup.
-pcall(function() os.execute('mkdir "' .. anigui_dir .. '" >nul 2>&1') end)
+if appdata then
+    pcall(function() os.execute('mkdir "' .. anigui_dir .. '" >nul 2>&1') end)
+else
+    pcall(function() os.execute('mkdir -p "' .. anigui_dir .. '" 2>/dev/null') end)
+end
 local timestamps_file = anigui_dir .. "/timestamps.json"
 local last_watched_file = anigui_dir .. "/last_watched.json"
 

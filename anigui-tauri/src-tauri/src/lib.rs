@@ -32,16 +32,12 @@ pub(crate) struct AppState {
 }
 
 fn get_config_path() -> std::path::PathBuf {
-    let base = std::env::var("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| dirs_next::home_dir().unwrap_or_default());
+    let base = dirs_next::config_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default());
     base.join("anicli-gui").join("config.json")
 }
 
 fn get_history_path() -> std::path::PathBuf {
-    let base = std::env::var("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| dirs_next::home_dir().unwrap_or_default());
+    let base = dirs_next::config_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default());
     base.join("anicli-gui").join("history.json")
 }
 

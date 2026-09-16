@@ -203,9 +203,9 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
       const format = formatFilter.value || null;
       let sort = null;
       if (sortFilter.value === "score_desc") sort = ["SCORE_DESC"];
-      else if (sortFilter.value === "score_asc") sort = ["SCORE_ASC"];
+      else if (sortFilter.value === "score_asc") sort = ["SCORE"];
       else if (sortFilter.value === "year_desc") sort = ["START_DATE_DESC"];
-      else if (sortFilter.value === "year_asc") sort = ["START_DATE_ASC"];
+      else if (sortFilter.value === "year_asc") sort = ["START_DATE"];
 
       const res = await invoke<any>("advanced_search", { search: query || null, genres: genreList.length ? genreList : null, year, season, format, sort, page: searchPage });
       const pageInfo = res?.data?.Page?.pageInfo;

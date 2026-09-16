@@ -6,12 +6,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Config, RuntimeInstallProgress, RuntimeStatus } from "./types";
 import { state } from "./state";
-import { el } from "./utils";
 
 // Views
 import { loadBrowse } from "./views/browse";
 import { loadDownloads } from "./views/downloads";
-import { loadTab, loadMore } from "./views/sidebar";
+import { loadHome, loadSearchResults, jumpToWatching } from "./views/home";
 import { resetPlayButtons } from "./views/detail";
 import { loadCalendar } from "./views/calendar";
 import { loadProfile } from "./views/profile";
@@ -26,6 +25,7 @@ import { toast } from "./components/toast";
 import { wireSyncBar, showSyncBar } from "./components/sync-bar";
 import { wireSettings, updateLoginStatus, fetchViewerName } from "./components/settings";
 import { openRuntimeSetup, wireRuntimeSetup, handleRuntimeProgress } from "./components/runtime-setup";
+import { handleDownloadChunk, handleDownloadFinished } from "./components/download-queue";
 
 async function init() {
   // ── Config ──────────────────────────────────────────────────────────────────
@@ -49,17 +49,13 @@ async function init() {
   checkForUpdate();
   checkAniCliVersion();
 
-  // ── Initial tab ─────────────────────────────────────────────────────────────
-  // Default to the user's watch list if they're already logged in.
-  loadTab(state.config.anilist_token ? "continue" : "trending");
+  // ── Initial screen ───────────────────────────────────────────────────────────
+  loadHome();
 
-  // ── Tab buttons ─────────────────────────────────────────────────────────────
-  document.getElementById("tab-trending")!.addEventListener("click", () => loadTab("trending"));
-  document.getElementById("tab-continue")!.addEventListener("click", () => loadTab("continue"));
-  document.getElementById("tab-planning")!.addEventListener("click", () => loadTab("planning"));
-
-  // ── Browse, Downloads, Calendar ──────────────────────────────────────────────
+  // ── Rail navigation ──────────────────────────────────────────────────────────
+  document.getElementById("btn-home")!.addEventListener("click", loadHome);
   document.getElementById("btn-browse")!.addEventListener("click", loadBrowse);
+  document.getElementById("btn-watching")!.addEventListener("click", jumpToWatching);
   document.getElementById("btn-downloads")!.addEventListener("click", loadDownloads);
   document.getElementById("btn-calendar")!.addEventListener("click", loadCalendar);
   document.getElementById("btn-shortcuts")!.addEventListener("click", toggleOverlay);
@@ -71,19 +67,13 @@ async function init() {
     loadProfile(state.config.anilist_token ? "stats" : "history");
   });
 
-  // ── Sidebar infinite scroll ──────────────────────────────────────────────────
-  document.getElementById("sidebar-list")!.addEventListener("scroll", (e) => {
-    const el = e.target as HTMLElement;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) loadMore();
-  });
-
   // ── Search ───────────────────────────────────────────────────────────────────
   let searchTimer: ReturnType<typeof setTimeout>;
   document.getElementById("search-input")!.addEventListener("input", (e) => {
     const q = (e.target as HTMLInputElement).value.trim();
     clearTimeout(searchTimer);
-    if (q.length < 2) { if (!q) loadTab("trending"); return; }
-    searchTimer = setTimeout(() => loadTab("search", q), 400);
+    if (q.length < 2) { if (!q) loadHome(); return; }
+    searchTimer = setTimeout(() => loadSearchResults(q), 400);
   });
 
   // ── Settings ─────────────────────────────────────────────────────────────────
@@ -176,38 +166,30 @@ async function init() {
   });
 
   await listen("download_chunk", (event: any) => {
-    const log = document.getElementById("download-log");
-    if (log) {
-      state.downloadLogBuffer += event.payload.chunk;
-      const clean = state.downloadLogBuffer.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-      const finalLines = clean.split('\n').map(l => {
-        const parts = l.split('\r');
-        return parts[parts.length - 1];
-      });
-      log.innerHTML = "";
-      for (const fl of finalLines) {
-        if (fl.trim() !== "") {
-          const div = el("div");
-          div.textContent = fl;
-          log.appendChild(div);
-        }
-      }
-      log.scrollTop = log.scrollHeight;
-    }
+    handleDownloadChunk(event.payload.chunk);
   });
 
   await listen("download_finished", (event: any) => {
-    const status = document.getElementById("download-status");
-    if (status) {
-      status.textContent = event.payload.success ? "✓ Download complete!" : "✗ Download failed.";
-      status.style.color = event.payload.success ? "var(--green)" : "var(--red)";
-    }
-    // Remove progress bar
-    document.querySelector(".download-progress")?.remove();
-    toast(
-      event.payload.success ? "Download complete!" : "Download failed.",
-      event.payload.success ? "success" : "error"
-    );
+    handleDownloadFinished(!!event.payload.success);
+  });
+}
+
+// ─── Lock Down Production Builds ──────────────────────────────────────────────
+// Blocks the right-click context menu and the common view-source/devtools
+// shortcuts in shipped builds, so the app doesn't invite poking at internals.
+// Left alone in dev (import.meta.env.DEV) so debugging still works normally.
+// This is a UX deterrent, not a security boundary — a determined user can
+// still reach devtools another way.
+
+if (!import.meta.env.DEV) {
+  window.addEventListener("contextmenu", (e) => e.preventDefault());
+  window.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    const blockCombo =
+      key === "f12" ||
+      ((e.ctrlKey || e.metaKey) && e.shiftKey && ["i", "j", "c"].includes(key)) ||
+      ((e.ctrlKey || e.metaKey) && ["u", "s"].includes(key));
+    if (blockCombo) e.preventDefault();
   });
 }
 

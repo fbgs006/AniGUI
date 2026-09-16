@@ -2,7 +2,7 @@
 // All view modules read and write this single object.
 // Keeping it in one place makes the data flow easy to trace.
 
-import type { Media, Config, TabName } from './types';
+import type { Media, Config, TabName, DownloadQueueItem } from './types';
 
 export const state = {
   config: {
@@ -11,18 +11,16 @@ export const state = {
     confirm_before_sync: true,
     anilist_token: "",
     download_dir: "",
-    theme: "purple",
+    theme: "coral",
     auto_sync: false,
     skip_auto_setup: false,
   } as Config,
 
   currentTab: "trending" as TabName,
 
-  // Sidebar
-  sidebarItems:   [] as Media[],
-  sidebarPage:    1,
-  sidebarHasMore: false,
-  sidebarLoading: false,
+  // Whatever list is currently on screen (Home rows, Browse, search results) —
+  // used as a fallback lookup for in-flight playback events.
+  sidebarItems: [] as Media[],
 
   // Detail panel
   selectedMedia: null as Media | null,
@@ -41,5 +39,5 @@ export const state = {
   activePlayingEp:      null as number | null,
 
   // Downloads
-  downloadLogBuffer: "",
+  downloadQueue: [] as DownloadQueueItem[],
 };

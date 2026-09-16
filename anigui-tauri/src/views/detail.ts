@@ -4,8 +4,9 @@ import './detail.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media } from '../types';
-import { $, el, formatCountdown } from '../utils';
+import { $, el, formatCountdown, setActiveNav } from '../utils';
 import { toast } from '../components/toast';
+import { enqueueDownload } from '../components/download-queue';
 
 // ─── Relations Helpers ────────────────────────────────────────────────────────
 
@@ -56,10 +57,7 @@ function attachRelationClicks() {
         const results: Media[] = data?.data?.Page?.media ?? [];
         const match = results.find(r => r.id === id) ?? results[0];
         if (match) {
-          state.currentTab = "search";
           state.sidebarItems = results;
-          const { renderSidebar } = await import('./sidebar');
-          renderSidebar();
           selectMedia(match);
         }
       } catch (e: any) {
@@ -116,25 +114,9 @@ export function resetPlayButtons() {
   });
 }
 
-export async function downloadEpisode(ep: number) {
+export function downloadEpisode(ep: number) {
   if (!state.selectedMedia) return;
-  const title = state.selectedMedia.title.english || state.selectedMedia.title.romaji;
-  $("#modal-download").classList.add("open");
-  const log = $("#download-log") as HTMLElement;
-  const status = $("#download-status") as HTMLElement;
-  log.innerHTML = "";
-  state.downloadLogBuffer = "";
-  status.textContent = "Starting download…";
-
-  // Insert indeterminate progress bar above the log
-  const existing = document.querySelector(".download-progress");
-  if (existing) existing.remove();
-  const bar = document.createElement("div");
-  bar.className = "download-progress";
-  bar.innerHTML = '<div class="download-progress-bar"></div>';
-  log.parentElement!.insertBefore(bar, log);
-
-  await invoke("start_download", { title, epNum: ep });
+  enqueueDownload(state.selectedMedia, ep);
 }
 
 // ─── Episode Grid ─────────────────────────────────────────────────────────────
@@ -204,7 +186,9 @@ export function renderDetail() {
   const nextEp = progress + 1;
 
   const main = $("#main-panel");
+  const banner = m.bannerImage || m.coverImage.large || m.coverImage.medium;
   main.innerHTML = `
+    <div class="detail-banner fade-in" style="background-image:url('${banner}')"><div class="detail-banner-scrim"></div></div>
     <div class="detail-hero fade-in">
       <img class="detail-cover" src="${m.coverImage.large || m.coverImage.medium}" alt="${title}" />
       <div class="detail-info">
@@ -240,17 +224,19 @@ export function renderDetail() {
       </div>
     </div>
 
-    ${eps ? `
-    <div class="card fade-in">
-      <div class="section-title">Episodes</div>
-      <div class="ep-grid" id="ep-grid"></div>
-      <div style="margin-top:16px;display:flex;gap:10px;" id="ep-actions" class="hidden">
-        <button class="btn btn-primary" id="btn-play-selected">▶ Play</button>
-        <button class="btn btn-outline" id="btn-dl-selected">⬇ Download</button>
-      </div>
-    </div>` : ""}
+    <div class="detail-body">
+      ${eps ? `
+      <div class="card fade-in">
+        <div class="section-title">Episodes</div>
+        <div class="ep-grid" id="ep-grid"></div>
+        <div style="margin-top:16px;display:flex;gap:10px;" id="ep-actions" class="hidden">
+          <button class="btn btn-primary" id="btn-play-selected">▶ Play</button>
+          <button class="btn btn-outline" id="btn-dl-selected">⬇ Download</button>
+        </div>
+      </div>` : ""}
 
-    ${renderRelations(m)}
+      ${renderRelations(m)}
+    </div>
   `;
 
   // Airing shows with unknown episode count
@@ -308,7 +294,6 @@ export function renderDetail() {
 export function selectMedia(media: Media) {
   state.selectedMedia = media;
   state.selectedEp = null;
-  // Lazy import breaks the circular dep with sidebar at init time
-  import('./sidebar').then(({ renderSidebar }) => renderSidebar());
+  setActiveNav('btn-watching');
   renderDetail();
 }

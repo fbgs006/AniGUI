@@ -1,0 +1,120 @@
+/* ─── Home Screen ─────────────────────────────────────────────────────────── */
+
+.home-kicker {
+  font: 500 10px var(--font-mono);
+  letter-spacing: 2px;
+  color: var(--accent2);
+  text-transform: uppercase;
+}
+
+/* ─── Hero (continue-watching) ───────────────────────────────────────────── */
+
+.home-hero {
+  position: relative;
+  min-height: 340px;
+  flex-shrink: 0;
+  background-size: cover;
+  background-position: center 20%;
+  background-color: var(--bg3);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+.home-hero-scrim {
+  position: absolute; inset: 0;
+  background: linear-gradient(0deg, var(--bg) 4%, rgba(11,10,14,.55) 55%, rgba(11,10,14,.25));
+}
+.home-hero-body {
+  position: relative;
+  padding: 0 46px 36px;
+  max-width: 680px;
+}
+.home-hero-body h1 {
+  margin: 12px 0 12px;
+  font: 700 clamp(30px, 4vw, 48px)/1 var(--font-display);
+  letter-spacing: -1.6px;
+  color: var(--text);
+}
+.home-hero-body p {
+  margin: 0 0 20px;
+  font: 400 14px/1.6 'DM Sans', sans-serif;
+  color: var(--text2);
+  max-width: 520px;
+}
+.home-hero-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.home-hero-progress {
+  margin-top: 22px;
+  width: 100%; max-width: 380px;
+  height: 3px; border-radius: 2px;
+  background: rgba(255,255,255,.12);
+  overflow: hidden;
+}
+.home-hero-progress-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+
+/* ─── Empty / Logged-out Hero ────────────────────────────────────────────── */
+
+.home-empty-hero {
+  flex-shrink: 0;
+  padding: 52px 46px 36px;
+  background: radial-gradient(circle at 85% 0%, rgba(255,95,77,.14), transparent 45%);
+  border-bottom: 1px solid var(--border);
+}
+.home-empty-hero h1 {
+  margin: 12px 0 12px;
+  font: 700 clamp(24px, 3vw, 34px)/1.15 var(--font-display);
+  letter-spacing: -1.2px;
+  max-width: 640px;
+}
+.home-empty-hero p {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--text2);
+  max-width: 520px;
+}
+
+/* ─── Rows ────────────────────────────────────────────────────────────────── */
+
+.home-rows { padding: 28px 46px 40px; display: flex; flex-direction: column; gap: 30px; }
+
+.home-section-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.home-section-title { font: 600 17px var(--font-display); letter-spacing: -.3px; color: var(--text); }
+
+.home-scroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.home-scroll::-webkit-scrollbar { height: 4px; }
+.home-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ─── Continue-watching Card ─────────────────────────────────────────────── */
+
+.home-card { width: 208px; flex-shrink: 0; cursor: pointer; }
+.home-card-art {
+  position: relative;
+  height: 118px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg3);
+}
+.home-card-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.home-card-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.14); }
+.home-card-bar-fill { height: 100%; background: var(--accent); }
+.home-card-ep {
+  position: absolute; top: 8px; left: 10px;
+  font: 500 9.5px var(--font-mono);
+  color: rgba(244,241,238,.85);
+  background: rgba(11,10,14,.6);
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+.home-card-title {
+  margin-top: 10px;
+  font: 600 13px/1.35 'DM Sans', sans-serif;
+  color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.home-card-meta { margin-top: 3px; font: 400 11px var(--font-mono); color: var(--text3); }

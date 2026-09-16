@@ -3,14 +3,12 @@ import './calendar.css';
 
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from '../components/toast';
+import { setActiveNav } from '../utils';
 
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 export async function loadCalendar() {
-  // Toggle active state
-  document.getElementById('btn-calendar')?.classList.add('active');
-  document.getElementById('btn-browse')?.classList.remove('active');
-  document.getElementById('btn-downloads')?.classList.remove('active');
+  setActiveNav('btn-calendar');
 
   const main = document.getElementById('main-panel')!;
   main.innerHTML = `
@@ -123,7 +121,6 @@ function buildGrid(schedules: any[]) {
         const results = res?.data?.Page?.media ?? [];
         const match = results.find((r: any) => r.id === id) ?? results[0];
         if (match) {
-          document.getElementById('btn-calendar')?.classList.remove('active');
           const { selectMedia } = await import('./detail');
           selectMedia(match);
         }

@@ -36,6 +36,7 @@ export interface Media {
   genres: string[];
   description?: string;
   coverImage: CoverImage;
+  bannerImage?: string;
   mediaListEntry?: MediaListEntry;
   relations?: { edges: RelationEdge[] };
   nextAiringEpisode?: NextAiringEpisode;
@@ -83,3 +84,16 @@ export interface HistoryEntry {
 }
 
 export type TabName = "continue" | "trending" | "search" | "planning" | "downloads";
+
+export type DownloadQueueStatus = "queued" | "downloading" | "done" | "failed";
+
+export interface DownloadQueueItem {
+  id: string;
+  animeId: number;
+  animeTitle: string;
+  cover: string;
+  epNum: number;
+  status: DownloadQueueStatus;
+  attempts: number;
+  log: string;
+}

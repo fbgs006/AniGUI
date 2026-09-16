@@ -12,6 +12,18 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::AppState;
 
+/// Suppresses the console window Windows would otherwise pop for a
+/// console-subsystem child (bash.exe, the PortableGit SFX) spawned from this
+/// windowed app. No-op on other platforms.
+fn no_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
 pub fn runtime_dir() -> PathBuf {
@@ -255,10 +267,10 @@ async fn download_with_progress(
 fn extract_portable_git_sfx(sfx_path: &Path, dest: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     let dest_arg = format!("-o{}", dest.display());
-    let status = std::process::Command::new(sfx_path)
-        .args(["-y", &dest_arg])
-        .status()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(sfx_path);
+    cmd.args(["-y", &dest_arg]);
+    no_window(&mut cmd);
+    let status = cmd.status().map_err(|e| e.to_string())?;
     if !status.success() {
         return Err(format!("Git Bash self-extractor exited with {:?}", status.code()));
     }
@@ -649,10 +661,10 @@ pub async fn install_runtime(
 
 fn chmod_executable(bash_path: &Path, target: &Path) -> Result<(), String> {
     let posix_target = to_posix_path(target);
-    let status = std::process::Command::new(bash_path)
-        .args(["-lc", &format!("chmod +x '{}'", posix_target)])
-        .status()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(bash_path);
+    cmd.args(["-lc", &format!("chmod +x '{}'", posix_target)]);
+    no_window(&mut cmd);
+    let status = cmd.status().map_err(|e| e.to_string())?;
     if !status.success() {
         return Err(format!("chmod +x on {} failed", target.display()));
     }

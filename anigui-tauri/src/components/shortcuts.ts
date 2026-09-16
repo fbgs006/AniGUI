@@ -6,13 +6,12 @@ import { state } from '../state';
 const SHORTCUTS = [
   { key: '/',       desc: 'Focus search' },
   { key: 'F',       desc: 'Focus search' },
+  { key: 'H',       desc: 'Open Home' },
   { key: 'B',       desc: 'Open Browse' },
+  { key: 'W',       desc: 'Jump to what you\'re watching' },
   { key: 'C',       desc: 'Open Calendar' },
   { key: 'P',       desc: 'Open Profile' },
   { key: 'D',       desc: 'Open Downloads' },
-  { key: '1',       desc: 'Sidebar → Trending' },
-  { key: '2',       desc: 'Sidebar → Watching' },
-  { key: '3',       desc: 'Sidebar → Planning' },
   { key: 'Space',   desc: 'Play next episode' },
   { key: 'Esc',     desc: 'Close overlay / go back' },
   { key: '?',       desc: 'Toggle this help' },
@@ -56,10 +55,22 @@ function handleKey(e: KeyboardEvent) {
       (document.getElementById('search-input') as HTMLInputElement)?.focus();
       break;
 
+    case 'h':
+    case 'H':
+      if (overlayVisible) break;
+      document.getElementById('btn-home')?.click();
+      break;
+
     case 'b':
     case 'B':
       if (overlayVisible) break;
       document.getElementById('btn-browse')?.click();
+      break;
+
+    case 'w':
+    case 'W':
+      if (overlayVisible) break;
+      document.getElementById('btn-watching')?.click();
       break;
 
     case 'c':
@@ -78,21 +89,6 @@ function handleKey(e: KeyboardEvent) {
     case 'D':
       if (overlayVisible) break;
       document.getElementById('btn-downloads')?.click();
-      break;
-
-    case '1':
-      if (overlayVisible) break;
-      document.getElementById('tab-trending')?.click();
-      break;
-
-    case '2':
-      if (overlayVisible) break;
-      document.getElementById('tab-continue')?.click();
-      break;
-
-    case '3':
-      if (overlayVisible) break;
-      document.getElementById('tab-planning')?.click();
       break;
 
     case ' ':

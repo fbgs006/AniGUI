@@ -11,7 +11,7 @@ export function openSettings() {
   (document.getElementById("s-token") as HTMLInputElement).value = state.config.anilist_token || "";
   (document.getElementById("s-bash") as HTMLInputElement).value = state.config.bash_path || "";
   (document.getElementById("s-dldir") as HTMLInputElement).value = state.config.download_dir || "";
-  (document.getElementById("s-theme") as HTMLSelectElement).value = state.config.theme || "purple";
+  (document.getElementById("s-theme") as HTMLSelectElement).value = state.config.theme || "coral";
   (document.getElementById("s-quality") as HTMLSelectElement).value = state.config.quality || "best";
   (document.getElementById("s-autosync") as HTMLInputElement).checked = state.config.auto_sync || false;
   (document.getElementById("s-dub") as HTMLInputElement).checked = state.config.dub || false;
@@ -59,21 +59,26 @@ export async function saveSettings() {
   document.getElementById("modal-settings")!.classList.remove("open");
   toast("Settings saved!", "success");
 
-  // Reload current tab to apply token changes
-  const { loadTab } = await import('../views/sidebar');
-  loadTab(state.currentTab);
+  // Reload Home to apply token changes (continue-watching / planning depend on it)
+  const { loadHome } = await import('../views/home');
+  loadHome();
 }
 
 export function updateLoginStatus() {
   const statusEl = document.getElementById("login-status");
+  const topbarEl = document.getElementById("topbar-status");
   const label    = document.getElementById("login-label");
   if (statusEl && label) {
     if (state.config.anilist_token) {
       statusEl.classList.add("logged-in");
+      topbarEl?.classList.add("logged-in");
+      statusEl.title = state.viewerName ?? "Logged in";
       label.textContent = state.viewerName ?? "Logged in";
     } else {
       statusEl.classList.remove("logged-in");
+      topbarEl?.classList.remove("logged-in");
       state.viewerName = null;
+      statusEl.title = "Not logged in";
       label.textContent = "Not logged in";
     }
   }

@@ -31,11 +31,9 @@ export function wireSyncBar() {
         } else {
           state.selectedMedia.mediaListEntry = { id: 0, progress: syncEp, status: "CURRENT" };
         }
-        // Re-render detail and sidebar to reflect new progress
+        // Re-render detail to reflect new progress
         const { renderDetail } = await import('../views/detail');
-        const { renderSidebar } = await import('../views/sidebar');
         renderDetail();
-        renderSidebar();
       }
       toast(`Synced EP ${syncEp}!`, "success");
     } catch (e: any) {

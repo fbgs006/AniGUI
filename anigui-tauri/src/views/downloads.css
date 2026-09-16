@@ -1,22 +1,17 @@
 /* ─── Downloads View ────────────────────────────────────────────────────────── */
 
-.downloads-container { padding: 40px; max-width: 1000px; margin: 0 auto; }
+.downloads-container { padding: 30px 46px 40px; max-width: 1000px; }
 
 .downloads-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 24px;
+  margin-bottom: 26px;
 }
-.downloads-header h2 { font-weight: 500; }
+.downloads-header h2 { font: 700 clamp(26px, 3vw, 34px)/1 var(--font-display); letter-spacing: -1.4px; color: var(--text); }
 .downloads-summary {
-  font-size: 13px;
+  font: 400 11px var(--font-mono);
   color: var(--text3);
-  font-weight: 600;
-  padding: 4px 12px;
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 999px;
 }
 
 .downloads-empty {
@@ -27,24 +22,36 @@
   gap: 12px;
   text-align: center;
   margin-top: 80px;
+  padding: 0 32px;
   color: var(--text2);
 }
 .downloads-empty svg { color: var(--text3); opacity: 0.5; margin-bottom: 4px; }
-.downloads-empty h2 { color: var(--text); margin-bottom: 4px; font-size: 22px; font-weight: 600; }
+.downloads-empty h2 { color: var(--text); margin-bottom: 4px; font: 700 22px var(--font-display); }
 .downloads-empty p { font-size: 14px; line-height: 1.6; max-width: 360px; }
 
-.download-group { margin-bottom: 30px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
-.download-group-title { padding: 18px 24px; font-weight: 700; background: var(--bg3); border-bottom: 1px solid var(--border); font-size: 16px; color: var(--accent); cursor: pointer; transition: opacity 0.2s; }
+.download-group { margin-bottom: 26px; }
+.download-group-title {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 10px;
+  font: 600 15px var(--font-display);
+  color: var(--text);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
 .download-group-title:hover { opacity: 0.8; }
-.download-items { padding: 0; }
-.download-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--border); transition: background 0.2s ease; }
-.download-item:hover { background: rgba(255,255,255,0.02); }
-.download-item:last-child { border-bottom: none; }
-.download-ep-num { font-weight: 600; font-size: 15px; color: var(--text); }
-.download-size { color: var(--text2); font-size: 13px; margin-left: 8px; }
-.download-actions { display: flex; gap: 12px; }
-.download-actions .btn { font-size: 13px; padding: 8px 16px; font-weight: 500; transition: transform 0.1s ease, background 0.2s ease; }
-.download-actions .btn:hover { transform: scale(1.05); }
+.download-items { display: flex; flex-direction: column; gap: 2px; }
+.download-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+  transition: background 0.2s ease;
+}
+.download-item:hover { background: rgba(255,255,255,.06); }
+.download-ep-num { font: 600 12.5px var(--font-mono); color: rgba(244,241,238,.85); }
+.download-size { color: var(--text3); font: 400 11.5px var(--font-mono); margin-left: 8px; }
+.download-actions { display: flex; gap: 8px; }
+.download-actions .btn { font-size: 12px; padding: 8px 15px; }
 
 /* Download modal log */
 .download-log {
@@ -60,22 +67,3 @@
   border: 1px solid var(--border);
 }
 
-/* ─── Download Progress Indicator ─────────────────────────────────────────── */
-.download-progress {
-  height: 3px;
-  border-radius: 2px;
-  background: var(--bg4);
-  overflow: hidden;
-  margin-bottom: 12px;
-}
-.download-progress-bar {
-  height: 100%;
-  width: 30%;
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--accent), var(--green));
-  animation: dl-progress 1.4s ease-in-out infinite;
-}
-@keyframes dl-progress {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(440%); }
-}

@@ -4,7 +4,7 @@ import './browse.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media } from '../types';
-import { el } from '../utils';
+import { el, setActiveNav } from '../utils';
 import { toast } from '../components/toast';
 import { getSeason, getNextSeason, seasonLabel } from '../utils';
 
@@ -14,9 +14,7 @@ const BROWSE_CACHE_TTL = 120_000; // 2 minutes
 
 export async function loadBrowse() {
   state.selectedMedia = null;
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  document.getElementById("btn-downloads")?.classList.remove("active");
-  document.getElementById("btn-browse")!.classList.add("active");
+  setActiveNav("btn-browse");
 
   const main = document.getElementById("main-panel")!;
 
@@ -89,6 +87,7 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
   const uniqueItemsMap = new Map<number, Media>();
   allItems.forEach(item => uniqueItemsMap.set(item.id, item));
   const uniqueItems = Array.from(uniqueItemsMap.values());
+  state.sidebarItems = uniqueItems;
 
   const genres = [
     "All",
@@ -172,12 +171,8 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
       </div>
     `;
     card.addEventListener("click", async () => {
-      document.getElementById("btn-browse")!.classList.remove("active");
-      state.currentTab = "trending";
       state.sidebarItems = rowItems || uniqueItems;
-      const { renderSidebar } = await import('./sidebar');
       const { selectMedia } = await import('./detail');
-      renderSidebar();
       selectMedia(media);
     });
     return card;

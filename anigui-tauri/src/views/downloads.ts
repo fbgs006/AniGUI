@@ -3,7 +3,9 @@ import './downloads.css';
 
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
+import { setActiveNav } from '../utils';
 import { toast } from '../components/toast';
+import { renderQueuePanel } from '../components/download-queue';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
@@ -13,21 +15,18 @@ function formatSize(bytes: number): string {
 
 export async function loadDownloads() {
   state.currentTab = "downloads";
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", false));
-  document.getElementById("btn-browse")?.classList.remove("active");
-  document.getElementById("btn-downloads")?.classList.add("active");
-
-  const sidebar = document.getElementById("sidebar-list")!;
-  sidebar.innerHTML = `<div class="sidebar-empty">Downloads are shown in the main panel.</div>`;
+  setActiveNav("btn-downloads");
 
   const main = document.getElementById("main-panel")!;
-  main.innerHTML = `<div class="downloads-empty"><h2>⬇ Downloads</h2><p>Loading your downloaded episodes...</p></div>`;
+  main.innerHTML = `<div id="download-queue-panel" class="downloads-container"></div><div class="downloads-empty"><h2>⬇ Downloads</h2><p>Loading your downloaded episodes...</p></div>`;
+  renderQueuePanel();
 
   try {
     const files = await invoke<any[]>("get_downloads");
 
     if (!files || !files.length) {
       main.innerHTML = `
+        <div id="download-queue-panel" class="downloads-container"></div>
         <div class="downloads-empty fade-in">
           <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -37,6 +36,7 @@ export async function loadDownloads() {
           <h2>No Downloads Yet</h2>
           <p>Episodes you download will appear here.<br>Open an anime's detail page and hit <strong>⬇ Download</strong> on any episode.</p>
         </div>`;
+      renderQueuePanel();
       return;
     }
 
@@ -59,7 +59,8 @@ export async function loadDownloads() {
       groups[animeName].push(f);
     }
 
-    let html = `<div class="downloads-container fade-in">
+    let html = `<div id="download-queue-panel" class="downloads-container"></div>
+    <div class="downloads-container fade-in">
       <div class="downloads-header">
         <h2>Offline Downloads</h2>
         <span class="downloads-summary">${files.length} file${files.length !== 1 ? 's' : ''} · ${formatSize(totalSize)}</span>
@@ -86,6 +87,7 @@ export async function loadDownloads() {
     }
     html += `</div>`;
     main.innerHTML = html;
+    renderQueuePanel();
 
     // ── Wire events via delegation (no globals) ───────────────────────────────
     main.querySelectorAll<HTMLElement>(".download-group-title").forEach(title => {

@@ -93,6 +93,16 @@ fn spawn_bash_command(bash_path: &str) -> std::process::Command {
         let existing = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", bootstrap::build_augmented_path(&existing));
     }
+    // bash.exe is a console-subsystem binary — spawning it from our windowed
+    // app would otherwise pop a visible console window for every play/download/
+    // version-check. CREATE_NO_WINDOW suppresses that; stdout/stderr piping
+    // (where callers use it) is unaffected.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd
 }
 
@@ -192,6 +202,7 @@ fragment mediaFields on Media {
   genres
   description(asHtml: false)
   coverImage { medium large }
+  bannerImage
   nextAiringEpisode { airingAt episode timeUntilAiring }
   relations {
     edges {
@@ -350,6 +361,36 @@ fn planning_query() -> String {
     )
 }
 
+// No status filter — returns every list entry (Watching/Planning/Paused/Dropped/
+// Completed/Rewatching), used by the bulk list-management screen.
+fn all_lists_query() -> String {
+    format!(
+        r#"{} query ($userId: Int) {{
+  MediaListCollection(userId: $userId, type: ANIME) {{
+    lists {{
+      entries {{
+        id
+        progress
+        status
+        media {{ ...mediaFields }}
+      }}
+    }}
+  }}
+}}"#,
+        MEDIA_FIELDS
+    )
+}
+
+const MEDIA_GENRES_QUERY: &str = r#"
+query ($ids: [Int]) {
+  Page(page: 1, perPage: 50) {
+    media(id_in: $ids, type: ANIME) {
+      id
+      genres
+    }
+  }
+}"#;
+
 const AIRING_SCHEDULE_QUERY: &str = r#"
 query ($airingAtGreater: Int, $airingAtLesser: Int, $page: Int) {
   Page(page: $page, perPage: 50) {
@@ -401,7 +442,7 @@ fn get_config(state: State<AppState>) -> Value {
         "confirm_before_sync": cfg.confirm_before_sync.unwrap_or(true),
         "auto_sync": cfg.auto_sync.unwrap_or(false),
         "dub": cfg.dub.unwrap_or(false),
-        "theme": cfg.theme.clone().unwrap_or_else(|| "purple".to_string()),
+        "theme": cfg.theme.clone().unwrap_or_else(|| "coral".to_string()),
         "anilist_token": cfg.anilist_token.clone().unwrap_or_default(),
         "download_dir": cfg.download_dir.clone().unwrap_or_else(|| {
             dirs_next::download_dir()
@@ -727,6 +768,76 @@ async fn get_planning(state: State<'_, AppState>) -> Result<Value, String> {
     ).await
 }
 
+// ─── Bulk List Management ────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_all_lists(state: State<'_, AppState>) -> Result<Value, String> {
+    let token = state.config.lock().unwrap().anilist_token.clone();
+    let token = token.ok_or("Not logged in")?;
+    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
+    let user_id = viewer["data"]["Viewer"]["id"].as_i64().ok_or("Could not get user ID")?;
+    anilist_query(
+        &state.http,
+        &all_lists_query(),
+        serde_json::json!({ "userId": user_id }),
+        Some(&token),
+    ).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BulkUpdateOp {
+    #[serde(rename = "mediaId")]
+    media_id: i64,
+    progress: Option<i64>,
+    status: Option<String>,
+}
+
+// Applies a batch of per-show progress/status updates sequentially (AniList has
+// no batch mutation), returning per-item success/failure so the UI can report
+// partial failures rather than aborting the whole batch on the first error.
+#[tauri::command]
+async fn bulk_update_entries(state: State<'_, AppState>, ops: Vec<BulkUpdateOp>) -> Result<Value, String> {
+    let token = state.config.lock().unwrap().anilist_token.clone();
+    let token = token.ok_or("Not logged in")?;
+
+    let mut results = Vec::with_capacity(ops.len());
+    for (i, op) in ops.iter().enumerate() {
+        if i > 0 {
+            // Small spacing between mutations to stay well under AniList's rate limit.
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+
+        let outcome = if let Some(progress) = op.progress {
+            anilist_query(
+                &state.http,
+                UPDATE_MUTATION,
+                serde_json::json!({
+                    "mediaId": op.media_id,
+                    "progress": progress,
+                    "status": op.status.clone().unwrap_or_else(|| "COMPLETED".to_string()),
+                }),
+                Some(&token),
+            ).await
+        } else if let Some(status) = &op.status {
+            anilist_query(
+                &state.http,
+                UPDATE_STATUS_MUTATION,
+                serde_json::json!({ "mediaId": op.media_id, "status": status }),
+                Some(&token),
+            ).await
+        } else {
+            Err("op has neither progress nor status".to_string())
+        };
+
+        match outcome {
+            Ok(_) => results.push(serde_json::json!({ "mediaId": op.media_id, "ok": true })),
+            Err(e) => results.push(serde_json::json!({ "mediaId": op.media_id, "ok": false, "error": e })),
+        }
+    }
+
+    Ok(serde_json::json!({ "results": results }))
+}
+
 
 // ─── Airing Schedule ──────────────────────────────────────────────────────────
 
@@ -810,6 +921,32 @@ fn clear_history() -> bool {
     let path = get_history_path();
     let _ = std::fs::write(&path, "[]");
     true
+}
+
+#[tauri::command]
+fn export_history_csv(path: String, csv: String) -> Result<Value, String> {
+    std::fs::write(&path, csv).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "success": true }))
+}
+
+// Best-effort genre lookup for a batch of media ids — public data, works logged
+// out. Used to enrich local watch-history stats with a "top genres" breakdown.
+#[tauri::command]
+async fn get_media_genres(state: State<'_, AppState>, ids: Vec<i64>) -> Result<Value, String> {
+    let token = state.config.lock().unwrap().anilist_token.clone();
+    let mut all = Vec::new();
+    for chunk in ids.chunks(50) {
+        let res = anilist_query(
+            &state.http,
+            MEDIA_GENRES_QUERY,
+            serde_json::json!({ "ids": chunk }),
+            token.as_deref(),
+        ).await?;
+        if let Some(arr) = res["data"]["Page"]["media"].as_array() {
+            all.extend(arr.clone());
+        }
+    }
+    Ok(serde_json::json!({ "media": all }))
 }
 
 #[tauri::command]
@@ -1188,6 +1325,8 @@ pub fn run() {
             get_all_time_popular,
             get_continue_watching,
             get_planning,
+            get_all_lists,
+            bulk_update_entries,
             sync_progress,
             update_status,
             play_episode,
@@ -1197,6 +1336,8 @@ pub fn run() {
             append_history,
             get_history,
             clear_history,
+            export_history_csv,
+            get_media_genres,
             check_for_update,
             install_update,
             check_anicli_version,

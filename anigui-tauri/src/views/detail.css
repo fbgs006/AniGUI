@@ -1,36 +1,45 @@
 /* ─── Detail Panel ─────────────────────────────────────────────────────────── */
 
+.detail-banner {
+  position: relative;
+  height: 300px;
+  flex-shrink: 0;
+  background-size: cover;
+  background-position: center 25%;
+  background-color: var(--bg3);
+}
+.detail-banner-scrim {
+  position: absolute; inset: 0;
+  background: linear-gradient(0deg, var(--bg) 4%, rgba(11,10,14,.35) 70%, rgba(11,10,14,.6));
+}
+
 .detail-hero {
   display: flex;
-  gap: 24px;
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
+  gap: 28px;
   align-items: flex-start;
+  padding: 0 46px 40px;
+  margin-top: -116px;
+  position: relative;
 }
 
 .detail-cover {
-  width: 140px;
-  min-width: 140px;
-  height: 200px;
+  width: 196px;
+  min-width: 196px;
+  height: 280px;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: 14px;
   background: var(--bg3);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow);
 }
 
-.detail-info { flex: 1; min-width: 0; }
+.detail-info { flex: 1; min-width: 0; padding-top: 96px; }
 
 .detail-title {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
-  margin-bottom: 10px;
-  background: linear-gradient(135deg, var(--text) 60%, var(--accent2));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font: 700 clamp(28px, 3.4vw, 46px)/1.02 var(--font-display);
+  letter-spacing: -1.6px;
+  margin-bottom: 14px;
+  color: var(--text);
 }
 
 .detail-meta-row {
@@ -42,53 +51,48 @@
 }
 
 .genre-pill {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
+  font: 500 11px 'DM Sans', sans-serif;
+  padding: 5px 11px;
   border-radius: 999px;
-  background: var(--bg4);
-  color: var(--text2);
+  background: transparent;
+  color: rgba(244,241,238,.65);
   border: 1px solid var(--border);
 }
 
 .score-badge {
-  font-size: 12px;
-  font-weight: 700;
+  font: 700 11px var(--font-mono);
   padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(61,220,151,0.15);
-  color: var(--green);
-  border: 1px solid rgba(61,220,151,0.3);
+  background: transparent;
+  color: var(--gold);
 }
 
 .season-badge {
-  font-size: 11px;
-  color: var(--text3);
-  padding: 3px 8px;
-  background: var(--bg3);
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  font: 500 10px var(--font-mono);
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: rgba(244,241,238,.45);
+  padding: 3px 0;
 }
 
 .airing-badge {
-  font-size: 11px;
-  font-weight: 600;
+  font: 600 11px 'DM Sans', sans-serif;
   color: var(--accent2);
   padding: 3px 10px;
-  background: rgba(124,92,252,0.12);
+  background: rgba(255,95,77,0.12);
   border-radius: 999px;
-  border: 1px solid rgba(124,92,252,0.3);
+  border: 1px solid rgba(255,95,77,0.3);
 }
 
 .detail-desc {
-  font-size: 13px;
+  font: 400 14px/1.65 'DM Sans', sans-serif;
   color: var(--text2);
-  line-height: 1.65;
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+  max-width: 640px;
 }
 
 .progress-section { margin-bottom: 14px; }
@@ -122,14 +126,19 @@
   flex-wrap: wrap;
 }
 
+.detail-body {
+  padding: 0 46px 46px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 /* ─── Episodes Grid ────────────────────────────────────────────────────────── */
 .section-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text2);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 12px;
+  font: 600 17px var(--font-display);
+  color: var(--text);
+  letter-spacing: -.3px;
+  margin-bottom: 14px;
 }
 
 .ep-grid {

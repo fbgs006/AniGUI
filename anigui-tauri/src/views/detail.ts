@@ -212,7 +212,11 @@ export function renderDetail() {
             ? `<span class="airing-badge">EP ${m.nextAiringEpisode.episode} airing in ${formatCountdown(m.nextAiringEpisode.timeUntilAiring)}</span>`
             : ""}
         </div>
-        ${m.description ? `<p class="detail-desc">${m.description.replace(/<[^>]*>/g, "").trim()}</p>` : ""}
+        ${m.description ? `
+        <div class="detail-desc-wrap">
+          <p class="detail-desc" id="detail-desc">${m.description.replace(/<[^>]*>/g, "").trim()}</p>
+          <button type="button" class="detail-desc-toggle" id="detail-desc-toggle">Show more</button>
+        </div>` : ""}
         ${eps ? `
         <div class="progress-section">
           <div class="progress-label">
@@ -249,6 +253,18 @@ export function renderDetail() {
       ${renderRelations(m)}
     </div>
   `;
+
+  // Description "Show more" toggle — only needed when the text actually overflows
+  // the 4-line clamp, since AniList descriptions vary a lot in length.
+  const descEl = document.getElementById("detail-desc");
+  const descToggle = document.getElementById("detail-desc-toggle") as HTMLButtonElement | null;
+  if (descEl && descToggle && descEl.scrollHeight > descEl.clientHeight + 1) {
+    descToggle.classList.add("show");
+    descToggle.addEventListener("click", () => {
+      const expanded = descEl.classList.toggle("expanded");
+      descToggle.textContent = expanded ? "Show less" : "Show more";
+    });
+  }
 
   // Airing shows with unknown episode count
   if (!eps) {

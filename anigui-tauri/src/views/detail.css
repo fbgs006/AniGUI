@@ -84,6 +84,8 @@
   border: 1px solid rgba(255,95,77,0.3);
 }
 
+.detail-desc-wrap { margin-bottom: 20px; }
+
 .detail-desc {
   font: 400 14px/1.65 'DM Sans', sans-serif;
   color: var(--text2);
@@ -91,9 +93,26 @@
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-bottom: 20px;
   max-width: 640px;
 }
+.detail-desc.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.detail-desc-toggle {
+  display: none;
+  margin-top: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent2);
+  font: 600 13px 'DM Sans', sans-serif;
+  cursor: pointer;
+}
+.detail-desc-toggle.show { display: inline-block; }
+.detail-desc-toggle:hover { text-decoration: underline; }
 
 .progress-section { margin-bottom: 14px; }
 

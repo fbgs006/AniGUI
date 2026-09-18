@@ -4,7 +4,7 @@ import './detail.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media } from '../types';
-import { $, el, formatCountdown, setActiveNav } from '../utils';
+import { $, el, formatCountdown, setActiveNav, wireDropdown } from '../utils';
 import { toast } from '../components/toast';
 import { enqueueDownload } from '../components/download-queue';
 
@@ -14,6 +14,15 @@ const RELATION_LABEL: Record<string, string> = {
   PREQUEL: "Prequel", SEQUEL: "Sequel", SIDE_STORY: "Side Story",
   PARENT: "Parent Story", ALTERNATIVE: "Alternative", SPIN_OFF: "Spin-off",
   SUMMARY: "Summary", CHARACTER: "Character", OTHER: "Other",
+};
+
+const DETAIL_STATUS_LABELS: Record<string, string> = {
+  "Not in List": "Not in List",
+  CURRENT: "Watching",
+  COMPLETED: "Completed",
+  PLANNING: "Plan to Watch",
+  DROPPED: "Dropped",
+  PAUSED: "Paused",
 };
 
 function renderRelations(m: Media): string {
@@ -102,10 +111,12 @@ export async function playEpisode(ep: number, triggerElement?: HTMLElement) {
 }
 
 export function resetPlayButtons() {
-  const pb = document.getElementById("btn-play-selected");
-  if (pb) pb.innerHTML = "▶ Play";
-  const nb = document.getElementById("play-next");
-  if (nb) nb.innerHTML = "▶ Play Next";
+  // Clear the "currently playing" pointer so a finished episode doesn't keep
+  // matching activePlayingAnimeId/Ep on the next render — otherwise buildEpGrid()
+  // and renderDetail() re-apply .playing-active (pointer-events: none) to that
+  // chip/button forever, making it look like the play button "stopped working".
+  state.activePlayingAnimeId = null;
+  state.activePlayingEp = null;
   document.querySelectorAll(".playing-active").forEach(el => {
     el.classList.remove("playing-active");
     if ((el as HTMLElement).dataset.originalText) {
@@ -212,14 +223,14 @@ export function renderDetail() {
         </div>` : ""}
         <div class="action-row">
           ${eps && nextEp <= eps ? `<button class="btn btn-primary" id="play-next">▶ Play EP ${nextEp}</button>` : ""}
-          <select class="status-select" id="detail-status">
-            <option value="Not in List">Not in List</option>
-            <option value="CURRENT">Watching</option>
-            <option value="COMPLETED">Completed</option>
-            <option value="PLANNING">Plan to Watch</option>
-            <option value="DROPPED">Dropped</option>
-            <option value="PAUSED">Paused</option>
-          </select>
+          <div class="dropdown dropdown-down" id="detail-status-dropdown">
+            <button type="button" class="status-select dropdown-trigger" id="detail-status-trigger"></button>
+            <div class="dropdown-menu" id="detail-status-menu">
+              ${Object.entries(DETAIL_STATUS_LABELS).map(([value, label]) =>
+                `<button type="button" class="dropdown-item" data-value="${value}">${label}</button>`
+              ).join("")}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -254,13 +265,17 @@ export function renderDetail() {
     }
   }
 
-  // Status select
-  const sel = $("#detail-status") as HTMLSelectElement;
-  sel.value = m.mediaListEntry?.status ?? "Not in List";
-  if (!state.config.anilist_token) sel.disabled = true;
-  sel.addEventListener("change", async () => {
-    if (!m.id) return;
-    await invoke("update_status", { mediaId: m.id, status: sel.value });
+  // Status dropdown (custom — a native <select>'s popup renders per the OS
+  // theme in WebView2, not the app's dark color-scheme, so text can end up
+  // unreadable; see the note on wireDropdown() in utils.ts).
+  const statusTrigger = document.getElementById("detail-status-trigger") as HTMLButtonElement;
+  const currentStatus = m.mediaListEntry?.status ?? "Not in List";
+  statusTrigger.textContent = `${DETAIL_STATUS_LABELS[currentStatus] ?? currentStatus} ▾`;
+  statusTrigger.disabled = !state.config.anilist_token;
+  wireDropdown("detail-status-dropdown", "detail-status-trigger", "detail-status-menu", async (value) => {
+    if (!m.id || !value) return;
+    statusTrigger.textContent = `${DETAIL_STATUS_LABELS[value] ?? value} ▾`;
+    await invoke("update_status", { mediaId: m.id, status: value });
     toast("Status updated!", "success");
   });
 

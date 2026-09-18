@@ -5,6 +5,7 @@ import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { state } from '../state';
 import { toast } from './toast';
 import { repairRuntime } from './runtime-setup';
+import { checkForUpdateManual } from './updater';
 import type { RuntimeStatus } from '../types';
 
 export function openSettings() {
@@ -17,6 +18,18 @@ export function openSettings() {
   (document.getElementById("s-dub") as HTMLInputElement).checked = state.config.dub || false;
   document.getElementById("modal-settings")!.classList.add("open");
   refreshRuntimeStatusLine();
+  refreshAppVersionLine();
+}
+
+async function refreshAppVersionLine() {
+  const label = document.getElementById("s-app-version");
+  if (!label) return;
+  try {
+    const info = await invoke<{ version: string; buildType: string }>("get_app_info");
+    label.textContent = `AniGUI v${info.version} · ${info.buildType}`;
+  } catch {
+    label.textContent = "AniGUI";
+  }
 }
 
 async function refreshRuntimeStatusLine() {
@@ -115,6 +128,14 @@ export function wireSettings() {
     document.getElementById("modal-settings")!.classList.remove("open");
     await repairRuntime();
     refreshRuntimeStatusLine();
+  });
+  document.getElementById("s-check-update")!.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+    await checkForUpdateManual();
+    btn.disabled = false;
+    btn.textContent = "Check for Updates";
   });
   // Note: login-status click is handled in main.ts (opens Profile panel)
   document.getElementById("modal-settings")!.addEventListener("click", (e) => {

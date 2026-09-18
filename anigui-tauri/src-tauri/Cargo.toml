@@ -1,6 +1,6 @@
 [package]
 name = "anigui-tauri"
-version = "2.0.0"
+version = "2.1.0"
 description = "AniGUI - Anime CLI Desktop App"
 authors = ["you"]
 edition = "2021"

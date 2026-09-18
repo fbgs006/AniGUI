@@ -4,6 +4,7 @@
 // Only runs in production builds — Tauri skips update checks in dev mode.
 
 import { invoke } from '@tauri-apps/api/core';
+import { toast } from './toast';
 
 export async function checkForUpdate() {
   // In dev mode the updater is a no-op — skip silently.
@@ -16,6 +17,24 @@ export async function checkForUpdate() {
     }
   } catch {
     // Silently ignore — network errors, no update endpoint yet, etc.
+  }
+}
+
+/** Same check, but user-triggered from Settings — always reports back with a toast. */
+export async function checkForUpdateManual() {
+  if (import.meta.env.DEV) {
+    toast("Update checks are disabled in dev mode.", "info");
+    return;
+  }
+  try {
+    const result = await invoke<{ available: boolean; version?: string } | null>('check_for_update');
+    if (result?.available && result.version) {
+      showUpdateBanner(result.version);
+    } else {
+      toast("You're on the latest version.", "success");
+    }
+  } catch (e: any) {
+    toast(`Couldn't check for updates: ${e}`, "error");
   }
 }
 

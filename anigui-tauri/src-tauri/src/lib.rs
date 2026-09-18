@@ -1028,6 +1028,22 @@ fn delete_local_file(path: String) -> Result<Value, String> {
     }
 }
 
+// ─── App Info ─────────────────────────────────────────────────────────────────
+
+/// The Windows portable build is the same binary as the installer build, just
+/// copied to a differently-named file in CI (see release.yml) — so the exe's
+/// own filename is the only reliable signal for which one is currently running.
+#[tauri::command]
+fn get_app_info(app: AppHandle) -> Value {
+    let version = app.package_info().version.to_string();
+    let build_type = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+        .map(|name| if name.contains("portable") { "Portable" } else { "Installed" }.to_string())
+        .unwrap_or_else(|| "Installed".to_string());
+    serde_json::json!({ "version": version, "buildType": build_type })
+}
+
 // ─── Auto-Updater ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1338,6 +1354,7 @@ pub fn run() {
             clear_history,
             export_history_csv,
             get_media_genres,
+            get_app_info,
             check_for_update,
             install_update,
             check_anicli_version,

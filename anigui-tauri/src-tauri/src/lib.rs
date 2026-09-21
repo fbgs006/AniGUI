@@ -84,6 +84,12 @@ fn find_bash() -> Option<String> {
     None
 }
 
+/// The `-lc` script for `cmd`, with the bundled runtime put on PATH first when
+/// needed (see `bootstrap::shell_path_prefix` for why this can't be an env var).
+fn shell_command(cmd: &str) -> String {
+    format!("{}{}", bootstrap::shell_path_prefix(), cmd)
+}
+
 /// Wraps `Command::new(bash_path)`, augmenting the child process's PATH with
 /// the bundled runtime's directories when `bash_path` is our own bundled
 /// bash — so `ani-cli` (invoked by bare name in the shell command string)
@@ -678,7 +684,7 @@ fn play_episode(
 
             let mut command = spawn_bash_command(&bash_path);
             command
-                .args(["-lc", &cmd])
+                .args(["-lc", &shell_command(&cmd)])
                 .env("ANIGUI_EP", current_ep.to_string())
                 .env("ANIGUI_EP_TOTAL", total_eps.to_string())
                 .env("ANIGUI_AUTOPLAY", if autoplay_next { "1" } else { "0" })
@@ -780,7 +786,7 @@ fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_num:
         );
 
         let mut child = match spawn_bash_command(&bash_path)
-            .args(["-lc", &cmd])
+            .args(["-lc", &shell_command(&cmd)])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -1235,7 +1241,7 @@ async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, Strin
 
     // Get local ani-cli version
     let local_output = spawn_bash_command(&bash_path)
-        .args(["-lc", "ani-cli -V 2>/dev/null || echo 'not-installed'"])
+        .args(["-lc", &shell_command("ani-cli -V 2>/dev/null || echo 'not-installed'")])
         .output()
         .map_err(|e| format!("Failed to run ani-cli: {}", e))?;
 
@@ -1399,7 +1405,13 @@ async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Val
     // The bundled ani-cli is a raw script, not a git checkout, so its own
     // `-U` self-updater has nothing to pull — re-fetch it pinned to the
     // latest release tag instead, and keep runtime/version.json in sync.
-    if bootstrap::is_bundled_bash(&bash_path) {
+    // On Linux the bash is the system's, so "bundled" means our ani-cli copy exists.
+    let uses_bundled_anicli = if cfg!(windows) {
+        bootstrap::is_bundled_bash(&bash_path)
+    } else {
+        bootstrap::bundled_anicli_path().exists()
+    };
+    if uses_bundled_anicli {
         let result = bootstrap::reinstall_anicli_only(&state.http).await;
         let success = result.is_ok();
         let _ = app.emit("anicli_updated", serde_json::json!({ "success": success }));
@@ -1407,7 +1419,7 @@ async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Val
     }
 
     let output = spawn_bash_command(&bash_path)
-        .args(["-lc", "ani-cli -U 2>&1"])
+        .args(["-lc", &shell_command("ani-cli -U 2>&1")])
         .output()
         .map_err(|e| format!("Failed to update ani-cli: {}", e))?;
 

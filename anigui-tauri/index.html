@@ -188,9 +188,10 @@
             <span class="modal-title">Setting Up AniGUI</span>
           </div>
           <div class="modal-body">
-            <p class="runtime-setup-intro">
-              AniGUI needs a few free, open-source tools the first time — ani-cli, mpv, fzf, and a
-              portable Git Bash (~150-200MB total). This happens once, and stays isolated to AniGUI.
+            <p class="runtime-setup-intro" id="runtime-setup-intro">
+              AniGUI needs a few free, open-source tools the first time — ani-cli, mpv, fzf (and a
+              portable Git Bash on Windows), roughly 150-200MB total. This happens once, and stays
+              isolated to AniGUI.
             </p>
             <div class="runtime-row" data-component="git-bash">
               <div class="runtime-row-top">
@@ -219,6 +220,17 @@
                 <span class="runtime-row-status" data-role="status">Waiting…</span>
               </div>
               <div class="runtime-progress-track"><div class="runtime-progress-fill" data-role="fill"></div></div>
+            </div>
+            <div id="runtime-setup-manual" style="display:none;">
+              <p class="runtime-setup-intro">
+                AniGUI can't download these for you on this system. Missing:
+                <strong id="runtime-setup-missing"></strong>
+              </p>
+              <p class="runtime-setup-intro">Ubuntu / Debian:</p>
+              <pre class="download-log">sudo apt install mpv
+git clone "https://github.com/pystardust/ani-cli.git"
+sudo install -Dm755 ani-cli/ani-cli /usr/local/bin/ani-cli</pre>
+              <p class="runtime-setup-intro">Then restart AniGUI. Other distros: see the Linux section of the README.</p>
             </div>
           </div>
           <div class="modal-footer" style="justify-content:space-between;">

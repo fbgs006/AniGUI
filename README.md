@@ -4,6 +4,10 @@ AniGUI is a desktop anime companion app that pairs the lightning-fast CLI stream
 
 Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episodes on your desktop with Netflix-style **Skip Opening / Next Episode** buttons, and automatically sync your progress with your AniList account.
 
+**Jump to:** [Install on Windows](#windows) · [Install on Linux](#linux) · [Features](#features) · [Settings](#settings) · [Build from source](#building-from-source)
+
+<a id="features"></a>
+
 ## ✨ Features
 
 ### Watching
@@ -34,7 +38,7 @@ Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episod
 
 ### Setup & offline
 
-- **Zero-setup install (Windows):** No Scoop, no terminal, no manual `ani-cli`/`mpv` install — AniGUI downloads its own private runtime on first launch and runs everything without popping a console window.
+- **Zero-setup install (Windows and Linux):** No Scoop, no terminal, no manual `ani-cli`/`mpv` install — AniGUI downloads its own private runtime on first launch and runs everything without popping a console window.
 - **In-app updates:** AniGUI checks GitHub Releases on launch and shows an **Update Now** banner when a new version is out. Updates are cryptographically signed and verified before they're installed. (Also available from **Settings → Check for Updates**.)
 - **Download queue:** Queue multiple episodes; they download one at a time in the background with live progress and automatic retry.
 
@@ -52,6 +56,8 @@ Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episod
 
 Every tagged release publishes builds for **both Windows and Linux** — check the **[Releases](https://github.com/fbgs006/ani-gui/releases)** tab. Pick your platform below.
 
+**On this page:** [Windows](#windows) · [Linux](#linux) ([AppImage / .deb / .rpm](#linux-get-anigui) · [install dependencies yourself](#linux-manual-dependencies)) · [Windows manual/Scoop setup](#windows-manual-setup) · [Build from source](#building-from-source)
+
 ### Windows
 
 No prerequisites — just download and run.
@@ -63,15 +69,30 @@ AniGUI updates itself from here on — v2.2.0 is the first version with working 
 
 Updating from an older version? The player interface is downloaded automatically in the background the first time you launch the new version.
 
-Already have `ani-cli`/`mpv`/Git Bash installed and want AniGUI to use those instead? Click **"I already have these installed — skip"** on the setup screen, or set the path manually later (see [Settings](#️-settings)).
+Already have `ani-cli`/`mpv`/Git Bash installed and want AniGUI to use those instead? Click **"I already have these installed — skip"** on the setup screen, or set the path manually later (see [Settings](#settings)). Prefer to manage everything yourself? See the [manual / Scoop setup](#windows-manual-setup).
 
 > **Heads up:** the new player interface and its buttons live in AniGUI's *bundled* `mpv`. If **Bash / Git Bash Path** is set in Settings, AniGUI uses your own `mpv` instead and leaves its config untouched — clear the field to get the AniGUI player.
 
 ### Linux
 
-The zero-setup bundled runtime is **Windows-only** — on Linux you install `mpv` and `ani-cli` yourself first, then run AniGUI. `bash` is already your system shell, so there's nothing to configure there.
+<a id="linux-get-anigui"></a>
 
-**1. Install the two runtime dependencies:**
+**1. Get AniGUI** — pick whichever you prefer:
+
+| Method | What to do |
+|---|---|
+| **AppImage** (any distro, incl. Arch) | Download the `.AppImage` from Releases, then `chmod +x AniGUI-*.AppImage && ./AniGUI-*.AppImage` |
+| **.deb** (Ubuntu/Debian) | Download the `.deb` from Releases and install with `sudo apt install ./AniGUI-*.deb` |
+| **.rpm** (Fedora) | Download the `.rpm` from Releases and install with `sudo dnf install ./AniGUI-*.rpm` |
+| **Build from source** | See [Building from Source](#building-from-source) below — useful on Arch since there's no native `.pacman` package, or if you want the latest unreleased code |
+
+**2. Launch it.** Same as on Windows: on first launch AniGUI downloads its own private copy of `mpv`, `fzf`, and `ani-cli` into `~/.local/share/AniGUI/runtime/` (~150-200MB, one time only), plus the player interface (uosc). Nothing is installed system-wide and no `sudo` is needed. It uses your system `bash`, and works on x86_64 and ARM64 (aarch64).
+
+The one thing it can't provide is the small system tools `ani-cli` itself calls (`curl`, `tar`, `grep`, `sed`). Ubuntu ships all of these except sometimes `curl`: `sudo apt install curl` if the setup reports a problem.
+
+<a id="linux-manual-dependencies"></a>
+
+**Prefer your distro's packages?** Click **"I already have these installed — skip"** on the setup screen (or install these first and AniGUI won't ask):
 
 Arch (and Arch-based distros):
 ```bash
@@ -86,14 +107,7 @@ git clone "https://github.com/pystardust/ani-cli.git"
 sudo install -Dm755 ani-cli/ani-cli /usr/local/bin/ani-cli
 ```
 
-**2. Get AniGUI itself** — pick whichever you prefer:
-
-| Method | What to do |
-|---|---|
-| **AppImage** (any distro, incl. Arch) | Download the `.AppImage` from Releases, then `chmod +x AniGUI-*.AppImage && ./AniGUI-*.AppImage` |
-| **.deb** (Ubuntu/Debian) | Download the `.deb` from Releases and install with `sudo apt install ./AniGUI-*.deb` |
-| **.rpm** (Fedora) | Download the `.rpm` from Releases and install with `sudo dnf install ./AniGUI-*.rpm` |
-| **Build from source** | See [Building from Source](#-building-from-source) below — useful on Arch since there's no native `.pacman` package, or if you want the latest unreleased code |
+<a id="windows-manual-setup"></a>
 
 ### Advanced: manual / Scoop-based setup (Windows)
 
@@ -106,6 +120,8 @@ scoop install git mpv ani-cli
 ```
 
 Then in AniGUI's **You → Settings** (⚙ in the icon rail), point **Bash / Git Bash Path** at your own `bash.exe` (e.g. `C:\Program Files\Git\bin\bash.exe`) — an explicit path here always overrides the bundled runtime. You can re-trigger the bundled setup at any time from **Settings → Dependency Setup → Repair / Reinstall**.
+
+<a id="building-from-source"></a>
 
 ## 🛠️ Building from Source
 
@@ -167,6 +183,8 @@ Press **?** anytime for the full list.
 |---|---|
 | `Tab` | Skip opening / ending (or click the on-screen button) |
 | `>` / `<` | Next / previous episode |
+
+<a id="settings"></a>
 
 ## ⚙️ Settings
 

@@ -26,11 +26,34 @@ fn no_window(cmd: &mut std::process::Command) {
 
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
+/// Windows keeps the runtime under `%APPDATA%`; elsewhere it follows the same
+/// `dirs_next::data_dir()` root the rest of the app (and the mpv Lua scripts)
+/// use, i.e. `~/.local/share/AniGUI` on Linux.
 pub fn runtime_dir() -> PathBuf {
-    let base = std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs_next::home_dir().unwrap_or_default());
+    let base = if cfg!(windows) {
+        std::env::var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| dirs_next::home_dir().unwrap_or_default())
+    } else {
+        dirs_next::data_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default())
+    };
     base.join("AniGUI").join("runtime")
+}
+
+/// Whether AniGUI can fetch its own runtime on this platform: the Windows
+/// builds, or the Linux AppImage/tarball builds on the CPU architectures they
+/// are published for. Everything else (e.g. macOS) is a manual install.
+pub fn auto_install_supported() -> bool {
+    cfg!(windows) || (cfg!(target_os = "linux") && linux_arch_names().is_some())
+}
+
+/// `(mpv-AppImage arch, fzf arch)` for this CPU, when both publish Linux builds.
+fn linux_arch_names() -> Option<(&'static str, &'static str)> {
+    match std::env::consts::ARCH {
+        "x86_64" => Some(("x86_64", "amd64")),
+        "aarch64" => Some(("aarch64", "arm64")),
+        _ => None,
+    }
 }
 
 fn staging_dir() -> PathBuf {
@@ -53,8 +76,10 @@ pub fn bundled_mpv_dir() -> PathBuf {
     runtime_dir().join("mpv")
 }
 
+/// On Windows this is the real `mpv.exe`; on Linux it is a small launcher
+/// script (see `write_mpv_launcher`) around the extracted AppImage.
 pub fn bundled_mpv_path() -> PathBuf {
-    bundled_mpv_dir().join("mpv.exe")
+    bundled_mpv_dir().join(if cfg!(windows) { "mpv.exe" } else { "mpv" })
 }
 
 pub fn bundled_fzf_dir() -> PathBuf {
@@ -62,7 +87,7 @@ pub fn bundled_fzf_dir() -> PathBuf {
 }
 
 pub fn bundled_fzf_path() -> PathBuf {
-    bundled_fzf_dir().join("fzf.exe")
+    bundled_fzf_dir().join(if cfg!(windows) { "fzf.exe" } else { "fzf" })
 }
 
 pub fn bundled_anicli_dir() -> PathBuf {
@@ -100,6 +125,8 @@ pub fn build_augmented_path(existing_path: &str) -> String {
     join_existing_dirs_with_path(&dirs, existing_path)
 }
 
+const PATH_SEP: &str = if cfg!(windows) { ";" } else { ":" };
+
 fn join_existing_dirs_with_path(dirs: &[PathBuf], existing_path: &str) -> String {
     let mut parts: Vec<String> = dirs
         .iter()
@@ -107,7 +134,32 @@ fn join_existing_dirs_with_path(dirs: &[PathBuf], existing_path: &str) -> String
         .map(|d| d.to_string_lossy().to_string())
         .collect();
     parts.push(existing_path.to_string());
-    parts.join(";")
+    parts.join(PATH_SEP)
+}
+
+/// Single-quotes `s` for a POSIX shell.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// A shell snippet that puts the bundled runtime on PATH *inside* the command
+/// string. Needed off Windows: `bash -lc` sources `/etc/profile`, which on
+/// Debian/Ubuntu resets PATH and would discard anything passed via the
+/// environment. Empty on Windows (Git-Bash keeps the inherited PATH) or when no
+/// bundled component is installed.
+pub fn shell_path_prefix() -> String {
+    if cfg!(windows) {
+        return String::new();
+    }
+    let dirs: Vec<String> = [bundled_mpv_dir(), bundled_fzf_dir(), bundled_anicli_dir()]
+        .iter()
+        .filter(|d| d.exists())
+        .map(|d| d.to_string_lossy().to_string())
+        .collect();
+    if dirs.is_empty() {
+        return String::new();
+    }
+    format!("export PATH={}:\"$PATH\"; ", sh_quote(&dirs.join(":")))
 }
 
 fn to_posix_path(p: &Path) -> String {
@@ -220,6 +272,17 @@ pub fn is_fzf_windows_asset(name: &str) -> bool {
     name.starts_with("fzf-") && name.ends_with("-windows_amd64.zip")
 }
 
+/// Matches pkgforge-dev/mpv-AppImage's self-contained build for `arch`
+/// (`x86_64` / `aarch64`), rejecting the `.zsync` update-metadata sidecars.
+pub fn is_mpv_appimage_asset(name: &str, arch: &str) -> bool {
+    name.starts_with("mpv-") && name.ends_with(&format!("-anylinux-{arch}.AppImage"))
+}
+
+/// Matches the Linux fzf release tarball for `arch` (`amd64` / `arm64`).
+pub fn is_fzf_linux_asset(name: &str, arch: &str) -> bool {
+    name.starts_with("fzf-") && name.ends_with(&format!("-linux_{arch}.tar.gz"))
+}
+
 // ─── Download with progress ───────────────────────────────────────────────────
 
 async fn download_with_progress(
@@ -299,6 +362,43 @@ fn extract_zip(archive_path: &Path, dest: &Path) -> Result<(), String> {
             let mut out_file = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
             std::io::copy(&mut entry, &mut out_file).map_err(|e| e.to_string())?;
         }
+    }
+    Ok(())
+}
+
+/// Extracts a `.tar.gz` with the system `tar` (always present on the Linux
+/// systems we target), which avoids pulling in archive crates for one asset.
+fn extract_tar_gz(archive_path: &Path, dest: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let status = std::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(archive_path)
+        .arg("-C")
+        .arg(dest)
+        .status()
+        .map_err(|e| format!("could not run tar: {e}"))?;
+    if !status.success() {
+        return Err(format!("tar exited with {:?}", status.code()));
+    }
+    Ok(())
+}
+
+/// Marks `path` executable (rwxr-xr-x). Downloads and script writes never carry
+/// the executable bit on Unix, which is what surfaces as "Permission denied".
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| format!("chmod +x {}: {e}", path.display()))
+}
+
+/// Windows has no executable bit. Scripts that Git-Bash must run are marked via
+/// the bundled bash instead — see `chmod_executable`.
+#[cfg(not(unix))]
+fn make_executable(path: &Path) -> Result<(), String> {
+    let bash_path = bundled_bash_path();
+    if bash_path.exists() {
+        chmod_executable(&bash_path, path)?;
     }
     Ok(())
 }
@@ -579,13 +679,17 @@ fn emit_progress(app: &AppHandle, component: &'static str, phase: &'static str, 
 
 #[tauri::command]
 pub fn check_runtime_status(state: State<'_, AppState>) -> Value {
-    let bash_present = bundled_bash_path().exists();
+    // Windows bundles its own Git Bash; Linux just uses the system shell.
+    let bash_present = if cfg!(windows) { bundled_bash_path().exists() } else { which::which("bash").is_ok() };
     let mpv_present = bundled_mpv_path().exists();
     let fzf_present = bundled_fzf_path().exists();
     let anicli_present = bundled_anicli_path().exists();
     let all_present = bash_present && mpv_present && fzf_present && anicli_present;
-    let system_fallback_present = which::which("bash").is_ok() && which::which("mpv").is_ok();
     let skip_auto_setup = state.config.lock().unwrap().skip_auto_setup.unwrap_or(false);
+
+    let auto_install_supported = auto_install_supported();
+    let missing_system_tools = missing_system_tools(cfg!(windows));
+    let system_fallback_present = which::which("bash").is_ok() && missing_system_tools.is_empty();
 
     serde_json::json!({
         "bash_present": bash_present,
@@ -595,7 +699,24 @@ pub fn check_runtime_status(state: State<'_, AppState>) -> Value {
         "all_present": all_present,
         "system_fallback_present": system_fallback_present,
         "skip_auto_setup": skip_auto_setup,
+        "auto_install_supported": auto_install_supported,
+        "bundles_bash": cfg!(windows),
+        "missing_system_tools": missing_system_tools,
     })
+}
+
+/// Tools a system-provided setup still lacks. On Windows only mpv is checked
+/// (the historical fallback rule); off Windows there is no bundled runtime to
+/// fall back on, so `ani-cli` must be on PATH too.
+fn missing_system_tools(windows: bool) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if which::which("mpv").is_err() {
+        missing.push("mpv");
+    }
+    if !windows && which::which("ani-cli").is_err() {
+        missing.push("ani-cli");
+    }
+    missing
 }
 
 #[tauri::command]
@@ -612,6 +733,12 @@ pub async fn install_runtime(
     state: State<'_, AppState>,
     force: Option<bool>,
 ) -> Result<Value, String> {
+    if !auto_install_supported() {
+        return Err(
+            "AniGUI can't set itself up on this system. Install mpv and ani-cli with your package manager instead (see the README's Linux section).".to_string(),
+        );
+    }
+
     let force = force.unwrap_or(false);
     let client = state.http.clone();
     let mut versions = load_versions();
@@ -619,7 +746,8 @@ pub async fn install_runtime(
     std::fs::create_dir_all(staging_dir()).map_err(|e| e.to_string())?;
 
     // ── Git-Bash ─────────────────────────────────────────────────────────
-    if force || !bundled_bash_path().exists() {
+    // Linux has a system bash, so there is nothing to bundle there.
+    if cfg!(windows) && (force || !bundled_bash_path().exists()) {
         emit_progress(&app, "git-bash", "downloading", 0, 0, "Fetching Git Bash…");
         let (tag, url) = latest_github_asset(&client, "git-for-windows/git", is_portable_git_asset)
             .await
@@ -649,7 +777,16 @@ pub async fn install_runtime(
     }
 
     // ── mpv ──────────────────────────────────────────────────────────────
-    if force || !bundled_mpv_path().exists() {
+    if !cfg!(windows) && (force || !bundled_mpv_path().exists()) {
+        let tag = install_mpv_linux(&app, &client)
+            .await
+            .inspect_err(|e| emit_progress(&app, "mpv", "error", 0, 0, e))?;
+        install_mpv_script();
+
+        versions.mpv_tag = Some(tag);
+        save_versions(&versions);
+        emit_progress(&app, "mpv", "done", 0, 0, "mpv ready");
+    } else if force || !bundled_mpv_path().exists() {
         emit_progress(&app, "mpv", "downloading", 0, 0, "Fetching mpv…");
         let (tag, url) = latest_github_asset(&client, "shinchiro/mpv-winbuild-cmake", is_mpv_winbuild_asset)
             .await
@@ -712,7 +849,15 @@ pub async fn install_runtime(
     write_mpv_shim().inspect_err(|e| emit_progress(&app, "mpv", "error", 0, 0, e))?;
 
     // ── fzf ──────────────────────────────────────────────────────────────
-    if force || !bundled_fzf_path().exists() {
+    if !cfg!(windows) && (force || !bundled_fzf_path().exists()) {
+        let tag = install_fzf_linux(&app, &client)
+            .await
+            .inspect_err(|e| emit_progress(&app, "fzf", "error", 0, 0, e))?;
+
+        versions.fzf_tag = Some(tag);
+        save_versions(&versions);
+        emit_progress(&app, "fzf", "done", 0, 0, "fzf ready");
+    } else if force || !bundled_fzf_path().exists() {
         emit_progress(&app, "fzf", "downloading", 0, 0, "Fetching fzf…");
         let (tag, url) = latest_github_asset(&client, "junegunn/fzf", is_fzf_windows_asset)
             .await
@@ -803,12 +948,102 @@ async fn reinstall_anicli_only_with_tag(client: &reqwest::Client, tag: &str) -> 
     }
     std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
 
-    let bash_path = bundled_bash_path();
-    if bash_path.exists() {
-        chmod_executable(&bash_path, &dest)?;
+    make_executable(&dest)
+}
+
+/// Downloads mpv's self-contained Linux AppImage, extracts it once (so launching
+/// needs neither FUSE nor a re-extraction per play), and writes a launcher named
+/// `mpv` that points mpv at AniGUI's own config dir via `MPV_HOME` — the Linux
+/// counterpart of the Windows build's `portable_config/`. Returns the release tag.
+async fn install_mpv_linux(app: &AppHandle, client: &reqwest::Client) -> Result<String, String> {
+    let (mpv_arch, _) = linux_arch_names().ok_or("no mpv build is published for this CPU architecture")?;
+    emit_progress(app, "mpv", "downloading", 0, 0, "Fetching mpv…");
+    let (tag, url) =
+        latest_github_asset(client, "pkgforge-dev/mpv-AppImage", |n| is_mpv_appimage_asset(n, mpv_arch)).await?;
+
+    let archive = staging_dir().join("mpv.AppImage");
+    {
+        let app2 = app.clone();
+        download_with_progress(client, &url, &archive, move |b, t| {
+            emit_progress(&app2, "mpv", "downloading", b, t, "Downloading mpv…");
+        })
+        .await?;
+    }
+    make_executable(&archive)?;
+
+    emit_progress(app, "mpv", "extracting", 0, 0, "Extracting mpv…");
+    let dir = bundled_mpv_dir();
+    // Wipes portable_config too; `install_runtime` reinstalls uosc right after
+    // because `uosc_ready()` is then false.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let extracted = std::process::Command::new(&archive)
+        .arg("--appimage-extract")
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    let app_run = dir.join("squashfs-root").join("AppRun");
+
+    // If extraction isn't possible, fall back to running the AppImage directly,
+    // asking its runtime to extract on the fly instead of mounting via FUSE.
+    let launcher_body = if extracted && app_run.exists() {
+        let _ = std::fs::remove_file(&archive);
+        format!("exec {} \"$@\"\n", sh_quote(&app_run.to_string_lossy()))
+    } else {
+        let kept = dir.join("mpv.AppImage");
+        std::fs::rename(&archive, &kept).or_else(|_| std::fs::copy(&archive, &kept).map(|_| ())).map_err(|e| e.to_string())?;
+        make_executable(&kept)?;
+        format!("export APPIMAGE_EXTRACT_AND_RUN=1\nexec {} \"$@\"\n", sh_quote(&kept.to_string_lossy()))
+    };
+
+    write_mpv_launcher(&launcher_body)?;
+    Ok(tag)
+}
+
+/// Writes the `mpv` launcher script (see `install_mpv_linux`).
+fn write_mpv_launcher(exec_lines: &str) -> Result<(), String> {
+    let config = portable_config_dir();
+    std::fs::create_dir_all(config.join("scripts")).map_err(|e| e.to_string())?;
+    let content = format!(
+        "#!/bin/sh\nexport MPV_HOME={}\n{}",
+        sh_quote(&config.to_string_lossy()),
+        exec_lines
+    );
+    let path = bundled_mpv_path();
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    make_executable(&path)
+}
+
+/// Downloads and unpacks the Linux fzf tarball. Returns the release tag.
+async fn install_fzf_linux(app: &AppHandle, client: &reqwest::Client) -> Result<String, String> {
+    let (_, fzf_arch) = linux_arch_names().ok_or("no fzf build is published for this CPU architecture")?;
+    emit_progress(app, "fzf", "downloading", 0, 0, "Fetching fzf…");
+    let (tag, url) = latest_github_asset(client, "junegunn/fzf", |n| is_fzf_linux_asset(n, fzf_arch)).await?;
+
+    let archive = staging_dir().join("fzf.tar.gz");
+    {
+        let app2 = app.clone();
+        download_with_progress(client, &url, &archive, move |b, t| {
+            emit_progress(&app2, "fzf", "downloading", b, t, "Downloading fzf…");
+        })
+        .await?;
     }
 
-    Ok(())
+    emit_progress(app, "fzf", "extracting", 0, 0, "Extracting fzf…");
+    let extract_dest = staging_dir().join("fzf-extract");
+    let _ = std::fs::remove_dir_all(&extract_dest);
+    extract_tar_gz(&archive, &extract_dest)?;
+    let fzf_bin = find_file(&extract_dest, "fzf").ok_or("fzf binary not found inside downloaded archive")?;
+    let _ = std::fs::remove_dir_all(bundled_fzf_dir());
+    flatten_into(&fzf_bin, &bundled_fzf_dir())?;
+    let _ = std::fs::remove_file(&archive);
+    let _ = std::fs::remove_dir_all(&extract_dest);
+    make_executable(&bundled_fzf_path())?;
+    Ok(tag)
 }
 
 /// Writes a tiny POSIX shim named `mpv` into the bundled bash's own
@@ -926,7 +1161,37 @@ mod bootstrap_tests {
         let fake_dir = PathBuf::from(r"Z:\anigui-test-nonexistent\a");
         let existing = "C:\\Windows\\System32";
         let augmented = join_existing_dirs_with_path(&[fake_dir, real_dir.clone()], existing);
-        assert_eq!(augmented, format!("{};{}", real_dir.to_string_lossy(), existing));
+        assert_eq!(augmented, format!("{}{}{}", real_dir.to_string_lossy(), PATH_SEP, existing));
+    }
+
+    #[test]
+    fn matches_mpv_appimage_for_the_requested_arch_only() {
+        assert!(is_mpv_appimage_asset("mpv-v0.41.0-anylinux-x86_64.AppImage", "x86_64"));
+        assert!(is_mpv_appimage_asset("mpv-v0.41.0-anylinux-aarch64.AppImage", "aarch64"));
+        assert!(!is_mpv_appimage_asset("mpv-v0.41.0-anylinux-aarch64.AppImage", "x86_64"));
+        assert!(!is_mpv_appimage_asset("mpv-v0.41.0-anylinux-x86_64.AppImage.zsync", "x86_64"));
+    }
+
+    #[test]
+    fn matches_fzf_linux_tarball_for_the_requested_arch_only() {
+        assert!(is_fzf_linux_asset("fzf-0.55.0-linux_amd64.tar.gz", "amd64"));
+        assert!(!is_fzf_linux_asset("fzf-0.55.0-linux_arm64.tar.gz", "amd64"));
+        assert!(!is_fzf_linux_asset("fzf-0.55.0-windows_amd64.zip", "amd64"));
+    }
+
+    #[test]
+    fn shell_quoting_survives_embedded_single_quotes() {
+        assert_eq!(sh_quote("/home/a b/x"), "'/home/a b/x'");
+        assert_eq!(sh_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn linux_arch_names_cover_the_published_builds() {
+        // Whatever machine runs the tests, the mapping must be self-consistent.
+        if let Some((mpv, fzf)) = linux_arch_names() {
+            assert!(["x86_64", "aarch64"].contains(&mpv));
+            assert!(["amd64", "arm64"].contains(&fzf));
+        }
     }
 
     #[test]

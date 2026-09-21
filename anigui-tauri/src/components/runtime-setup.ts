@@ -74,8 +74,27 @@ export function handleRuntimeProgress(payload: RuntimeInstallProgress) {
   }
 }
 
-export function openRuntimeSetup(_status: RuntimeStatus) {
-  resetRows();
+/** Off Windows there is nothing to download: show what to install instead of the progress rows. */
+function showManualInstall(missing: string[]) {
+  document.querySelectorAll<HTMLElement>("#runtime-setup-intro, .runtime-row")
+    .forEach((n) => { n.style.display = "none"; });
+  const manual = document.getElementById("runtime-setup-manual");
+  if (manual) manual.style.display = "";
+  const missingEl = document.getElementById("runtime-setup-missing");
+  if (missingEl) missingEl.textContent = missing.join(", ") || "mpv, ani-cli";
+  const installBtn = document.getElementById("runtime-setup-install") as HTMLButtonElement | null;
+  if (installBtn) installBtn.style.display = "none";
+  const skipBtn = document.getElementById("runtime-setup-skip") as HTMLButtonElement | null;
+  if (skipBtn) { skipBtn.style.display = ""; skipBtn.textContent = "Don't show this again"; }
+}
+
+export function openRuntimeSetup(status: RuntimeStatus) {
+  if (!status.auto_install_supported) showManualInstall(status.missing_system_tools);
+  else {
+    resetRows();
+    const bashRow = row("git-bash");
+    if (bashRow) bashRow.style.display = status.bundles_bash ? "" : "none";
+  }
   const skipBtn = document.getElementById("runtime-setup-skip") as HTMLButtonElement | null;
   if (skipBtn) skipBtn.style.display = "";
   document.getElementById("modal-runtime-setup")?.classList.add("open");
@@ -108,6 +127,11 @@ async function runInstall(force: boolean) {
 
 /** Reopens the setup modal for a forced reinstall, triggered from Settings. */
 export async function repairRuntime() {
+  const status = await invoke<RuntimeStatus>("check_runtime_status");
+  if (!status.auto_install_supported) {
+    openRuntimeSetup(status);
+    return;
+  }
   resetRows();
   const skipBtn = document.getElementById("runtime-setup-skip") as HTMLButtonElement | null;
   if (skipBtn) skipBtn.style.display = "none";

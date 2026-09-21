@@ -64,6 +64,11 @@ export interface RuntimeStatus {
   all_present: boolean;
   system_fallback_present: boolean;
   skip_auto_setup: boolean;
+  /** False on platforms with no downloadable runtime (e.g. macOS): the user must install the tools. */
+  auto_install_supported: boolean;
+  /** Only Windows downloads its own Git Bash; Linux uses the system shell. */
+  bundles_bash: boolean;
+  missing_system_tools: string[];
 }
 
 export type RuntimeComponent = "git-bash" | "mpv" | "fzf" | "ani-cli";

@@ -102,12 +102,25 @@ export async function playEpisode(ep: number, triggerElement?: HTMLElement) {
   const title = state.selectedMedia.title.english || state.selectedMedia.title.romaji;
   toast(`Launching EP ${ep}…`, "info");
 
-  const result = await invoke<{ error?: string; success?: boolean }>("play_episode", { title, epNum: ep });
+  const result = await invoke<{ error?: string; success?: boolean }>("play_episode", {
+    title,
+    epNum: ep,
+    malId: state.selectedMedia.idMal ?? null,
+    totalEps: state.selectedMedia.episodes ?? 0,
+  });
   if (result.error) {
     toast(result.error, "error");
     state.playLaunching = false;
     resetPlayButtons();
   }
+}
+
+/** The player's next/previous button switched episode without going through the UI. */
+export function setPlayingEpisode(ep: number) {
+  state.activePlayingEp = ep;
+  document.querySelectorAll(".ep-chip.playing-active").forEach(el => el.classList.remove("playing-active"));
+  document.querySelector(`.ep-chip[data-ep="${ep}"]`)?.classList.add("playing-active");
+  toast(`Now playing EP ${ep}`, "info");
 }
 
 export function resetPlayButtons() {

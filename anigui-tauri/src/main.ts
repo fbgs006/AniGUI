@@ -11,7 +11,7 @@ import { state } from "./state";
 import { loadBrowse } from "./views/browse";
 import { loadDownloads } from "./views/downloads";
 import { loadHome, loadSearchResults, jumpToWatching } from "./views/home";
-import { resetPlayButtons } from "./views/detail";
+import { resetPlayButtons, setPlayingEpisode } from "./views/detail";
 import { loadCalendar } from "./views/calendar";
 import { loadProfile } from "./views/profile";
 
@@ -101,12 +101,18 @@ async function init() {
     resetPlayButtons();
   });
 
+  await listen("playback_episode_changed", (event: any) => {
+    setPlayingEpisode(event.payload.epNum);
+  });
+
   await listen("playback_finished", async (event: any) => {
     const { epNum, percent, timePos, elapsed } = event.payload;
 
     // ── Local history (works without AniList login) ────────────────────────────
+    // epNum comes from the payload, not state.activePlayingEp: the player's
+    // next-episode button can move that on before this handler gets to run.
     const histMedia = state.sidebarItems.find(m => m.id === state.activePlayingAnimeId) ?? state.selectedMedia;
-    if (histMedia && state.activePlayingEp != null) {
+    if (histMedia) {
       const nowSec = Math.floor(Date.now() / 1000);
       try {
         await invoke("append_history", {
@@ -114,7 +120,7 @@ async function init() {
             animeId:    histMedia.id,
             animeTitle: histMedia.title.english || histMedia.title.romaji,
             cover:      histMedia.coverImage.medium,
-            epNum:      state.activePlayingEp,
+            epNum,
             watchedAt:  nowSec,
           }
         });
@@ -129,7 +135,7 @@ async function init() {
 
     // Capture IDs before any awaits — user may navigate during the AniSkip fetch.
     const capturedAnimeId = state.activePlayingAnimeId;
-    const capturedEp = state.activePlayingEp;
+    const capturedEp = epNum;
 
     let isFinished = percent > 0.85;
 

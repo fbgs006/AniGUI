@@ -460,6 +460,101 @@ mp.add_periodic_timer(5, function()
 end)
 "#;
     let _ = std::fs::write(script_path, script_content);
+    let _ = std::fs::write(
+        path.join("anigui-controls.lua"),
+        include_str!("../lua/anigui-controls.lua"),
+    );
+}
+
+// ─── Player UI (uosc) ─────────────────────────────────────────────────────────
+// Replaces mpv's stock on-screen controller with uosc, but only inside the
+// bundled mpv: its `portable_config/` is ours to own, whereas a system mpv's
+// config belongs to the user and is never touched.
+
+const UOSC_CONF: &str = "\
+# Managed by AniGUI — rewritten whenever the player interface is (re)installed.
+controls=menu,gap,<video,audio>subtitles,<has_many_audio>audio,gap,space,command:fast_forward:script-binding anigui_controls/skip?Skip opening / ending,gap,<user-data/anigui/has_prev>command:skip_previous:script-binding anigui_controls/prev-episode?Previous episode,<user-data/anigui/has_next>command:skip_next:script-binding anigui_controls/next-episode?Next episode,gap,fullscreen
+color=foreground=ff5f4d,foreground_text=0b0a0e,background=15121a,background_text=f4f1ee,window_border=0b0a0e,curtain=0b0a0e,heatmap=ff5f4d
+";
+
+// uosc draws its own window chrome, so mpv's OSC/OSD bar/border must go.
+const MPV_CONF_BLOCK: &str = "osc=no\nosd-bar=no\nborder=no\n";
+
+const MANAGED_BEGIN: &str = "# >>> AniGUI managed (do not edit) >>>";
+const MANAGED_END: &str = "# <<< AniGUI managed <<<";
+
+/// Replaces the AniGUI-managed block in `existing` (or appends one), leaving
+/// anything the user wrote around it untouched.
+fn upsert_managed_block(existing: &str, body: &str) -> String {
+    let block = format!("{MANAGED_BEGIN}\n{body}{MANAGED_END}\n");
+
+    if let (Some(start), Some(end)) = (existing.find(MANAGED_BEGIN), existing.find(MANAGED_END)) {
+        if start < end {
+            let after = &existing[end + MANAGED_END.len()..];
+            let after = after
+                .strip_prefix("\r\n")
+                .or_else(|| after.strip_prefix('\n'))
+                .unwrap_or(after);
+            return format!("{}{}{}", &existing[..start], block, after);
+        }
+    }
+
+    let mut out = existing.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&block);
+    out
+}
+
+fn portable_config_dir() -> PathBuf {
+    bundled_mpv_dir().join("portable_config")
+}
+
+/// `uosc.conf` is written last by `write_player_ui_config`, so its presence
+/// means the whole install completed (an interrupted extraction retries).
+fn uosc_ready() -> bool {
+    portable_config_dir().join("script-opts").join("uosc.conf").exists()
+}
+
+pub fn is_uosc_asset(name: &str) -> bool {
+    name == "uosc.zip"
+}
+
+fn write_player_ui_config() -> Result<(), String> {
+    let dir = portable_config_dir();
+    let script_opts = dir.join("script-opts");
+    std::fs::create_dir_all(&script_opts).map_err(|e| e.to_string())?;
+
+    let mpv_conf = dir.join("mpv.conf");
+    let existing = std::fs::read_to_string(&mpv_conf).unwrap_or_default();
+    std::fs::write(&mpv_conf, upsert_managed_block(&existing, MPV_CONF_BLOCK)).map_err(|e| e.to_string())?;
+
+    std::fs::write(script_opts.join("uosc.conf"), UOSC_CONF).map_err(|e| e.to_string())
+}
+
+/// Installs uosc into the bundled mpv if it isn't there yet (or `force`).
+/// Returns `Ok(true)` when something was installed. The bundled mpv working
+/// without uosc is fine, so callers should treat an `Err` as non-fatal.
+pub async fn ensure_player_ui(
+    client: &reqwest::Client,
+    force: bool,
+    on_progress: impl FnMut(u64, u64),
+) -> Result<bool, String> {
+    if !bundled_mpv_path().exists() || (!force && uosc_ready()) {
+        return Ok(false);
+    }
+
+    let (_tag, url) = latest_github_asset(client, "tomasklaen/uosc", is_uosc_asset).await?;
+    let archive = staging_dir().join("uosc.zip");
+    download_with_progress(client, &url, &archive, on_progress).await?;
+
+    let extracted = extract_zip(&archive, &portable_config_dir());
+    let _ = std::fs::remove_file(&archive);
+    extracted?;
+
+    write_player_ui_config()?;
+    Ok(true)
 }
 
 // ─── Progress events ──────────────────────────────────────────────────────────
@@ -591,6 +686,24 @@ pub async fn install_runtime(
         emit_progress(&app, "mpv", "done", 0, 0, "mpv ready");
     } else {
         emit_progress(&app, "mpv", "done", 0, 0, "Already installed");
+    }
+
+    // Cosmetic extra: a failure here must not abort the install, mpv's stock
+    // controls keep working without it.
+    if bundled_mpv_path().exists() && (force || !uosc_ready()) {
+        emit_progress(&app, "mpv", "downloading", 0, 0, "Fetching player interface…");
+        let app2 = app.clone();
+        let installed = ensure_player_ui(&client, force, move |b, t| {
+            emit_progress(&app2, "mpv", "downloading", b, t, "Downloading player interface…");
+        })
+        .await;
+        match installed {
+            Ok(_) => emit_progress(&app, "mpv", "done", 0, 0, "mpv ready"),
+            Err(e) => {
+                eprintln!("[anigui] player interface install failed: {e}");
+                emit_progress(&app, "mpv", "done", 0, 0, "mpv ready (default interface)");
+            }
+        }
     }
 
     // Re-written unconditionally: a fresh Git-Bash extraction wipes any
@@ -764,6 +877,33 @@ mod bootstrap_tests {
         assert!(is_fzf_windows_asset("fzf-0.55.0-windows_amd64.zip"));
         assert!(!is_fzf_windows_asset("fzf-0.55.0-linux_amd64.tar.gz"));
         assert!(!is_fzf_windows_asset("fzf-0.55.0-windows_arm64.zip"));
+    }
+
+    #[test]
+    fn matches_only_the_uosc_release_zip() {
+        assert!(is_uosc_asset("uosc.zip"));
+        assert!(!is_uosc_asset("uosc.conf"));
+    }
+
+    #[test]
+    fn managed_block_is_appended_without_touching_user_config() {
+        let out = upsert_managed_block("hwdec=auto", "osc=no\n");
+        assert!(out.starts_with("hwdec=auto\n"));
+        assert!(out.contains("osc=no\n"));
+        assert!(out.ends_with(&format!("{MANAGED_END}\n")));
+    }
+
+    #[test]
+    fn managed_block_is_replaced_in_place_and_idempotent() {
+        let first = upsert_managed_block("a=1\n", "osc=no\n");
+        let user_edited = format!("{first}b=2\n");
+        let updated = upsert_managed_block(&user_edited, "osc=no\nborder=no\n");
+
+        assert_eq!(updated.matches(MANAGED_BEGIN).count(), 1);
+        assert!(updated.contains("border=no"));
+        assert!(updated.starts_with("a=1\n"));
+        assert!(updated.ends_with("b=2\n"));
+        assert_eq!(upsert_managed_block(&updated, "osc=no\nborder=no\n"), updated);
     }
 
     #[test]

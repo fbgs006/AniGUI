@@ -572,8 +572,46 @@ async fn update_status(state: State<'_, AppState>, media_id: i64, status: String
     .await
 }
 
+/// What the player's next/previous-episode button asked for (see
+/// `lua/anigui-controls.lua`, which writes it to `nav.json` before quitting mpv).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NavAction {
+    Next,
+    Prev,
+}
+
+fn parse_nav_action(raw: &str) -> Option<NavAction> {
+    let json: Value = serde_json::from_str(raw).ok()?;
+    match json["action"].as_str()? {
+        "next" => Some(NavAction::Next),
+        "prev" => Some(NavAction::Prev),
+        _ => None,
+    }
+}
+
+/// The episode to launch after `action`, or `None` when it would fall off
+/// either end. `total <= 0` means the episode count is unknown (airing show),
+/// so "next" is left unbounded.
+fn navigation_target(action: NavAction, current: i64, total: i64) -> Option<i64> {
+    match action {
+        NavAction::Prev => (current > 1).then(|| current - 1),
+        NavAction::Next => (total <= 0 || current < total).then(|| current + 1),
+    }
+}
+
+fn anigui_data_dir() -> Option<std::path::PathBuf> {
+    dirs_next::data_dir().map(|d| d.join("AniGUI"))
+}
+
 #[tauri::command]
-fn play_episode(state: State<AppState>, app: AppHandle, title: String, ep_num: i64) -> Value {
+fn play_episode(
+    state: State<AppState>,
+    app: AppHandle,
+    title: String,
+    ep_num: i64,
+    mal_id: Option<i64>,
+    total_eps: Option<i64>,
+) -> Value {
     let cfg = state.config.lock().unwrap().clone();
     let bash = cfg.bash_path.clone().or_else(find_bash);
 
@@ -592,15 +630,15 @@ fn play_episode(state: State<AppState>, app: AppHandle, title: String, ep_num: i
         *active = true;
     }
 
+    let total_eps = total_eps.unwrap_or(0);
+
     std::thread::spawn(move || {
         let safe_title = title.replace('"', "");
         let dub_flag = if cfg.dub.unwrap_or(false) { " --dub" } else { "" };
-        let cmd = format!(
-            r#"ani-cli "{}" -S 1 -e {} -q {}{} --exit-after-play"#,
-            safe_title, ep_num, quality, dub_flag
-        );
-        let start = std::time::Instant::now();
-        
+        let data_dir = anigui_data_dir();
+        let stats_file = data_dir.as_ref().map(|d| d.join("last_watched.json"));
+        let nav_file = data_dir.as_ref().map(|d| d.join("nav.json"));
+
         let window_clone = app.get_webview_window("main");
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(6));
@@ -608,28 +646,44 @@ fn play_episode(state: State<AppState>, app: AppHandle, title: String, ep_num: i
                 let _ = window.minimize();
             }
         });
-        let _ = spawn_bash_command(&bash_path)
-            .args(["-lc", &cmd])
-            .status();
 
-        *player_active.lock().unwrap() = false;
+        // One iteration per episode: the player's next/previous buttons quit
+        // mpv with a request in nav.json, and we relaunch on the target.
+        let mut current_ep = ep_num;
+        let mut is_first_launch = true;
+        loop {
+            let cmd = format!(
+                r#"ani-cli "{}" -S 1 -e {} -q {}{} --exit-after-play"#,
+                safe_title, current_ep, quality, dub_flag
+            );
+            let start = std::time::Instant::now();
 
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
-        
-        let _ = app.emit("player_closed", ());
+            // Stale files from a previous episode must not be mistaken for this one's.
+            for stale in [&stats_file, &nav_file].into_iter().flatten() {
+                let _ = std::fs::remove_file(stale);
+            }
 
-        let elapsed = start.elapsed().as_secs_f64();
-        let mut percent = 0.0;
-        let mut time_pos = 0.0;
-        
-        if let Some(mut path) = dirs_next::data_dir() {
-            path.push("AniGUI");
-            let stats_file = path.join("last_watched.json");
-            if let Ok(content) = std::fs::read_to_string(&stats_file) {
+            let mut command = spawn_bash_command(&bash_path);
+            command
+                .args(["-lc", &cmd])
+                .env("ANIGUI_EP", current_ep.to_string())
+                .env("ANIGUI_EP_TOTAL", total_eps.to_string());
+            if let Some(id) = mal_id {
+                command.env("ANIGUI_MAL_ID", id.to_string());
+            }
+            if let Some(nav) = &nav_file {
+                command.env("ANIGUI_NAV_FILE", nav);
+            }
+            let _ = command.status();
+
+            let elapsed = start.elapsed().as_secs_f64();
+            let mut percent = 0.0;
+            let mut time_pos = 0.0;
+            let mut played = false;
+
+            if let Some(content) = stats_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    played = true;
                     if let Some(p) = json["percent"].as_f64() {
                         percent = p;
                     }
@@ -638,15 +692,43 @@ fn play_episode(state: State<AppState>, app: AppHandle, title: String, ep_num: i
                     }
                 }
             }
-        }
 
-        if token.is_some() {
-            let _ = app.emit("playback_finished", serde_json::json!({
-                "epNum": ep_num,
-                "elapsed": elapsed,
-                "percent": percent,
-                "timePos": time_pos
-            }));
+            let next_ep = nav_file
+                .as_ref()
+                .and_then(|f| std::fs::read_to_string(f).ok())
+                .and_then(|raw| parse_nav_action(&raw))
+                .and_then(|action| navigation_target(action, current_ep, total_eps));
+
+            if next_ep.is_none() {
+                *player_active.lock().unwrap() = false;
+
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+
+                let _ = app.emit("player_closed", ());
+            }
+
+            // A relaunched episode that never got as far as a tracker tick
+            // (ani-cli failed, or it was closed within seconds) wasn't watched.
+            if token.is_some() && (is_first_launch || played) {
+                let _ = app.emit("playback_finished", serde_json::json!({
+                    "epNum": current_ep,
+                    "elapsed": elapsed,
+                    "percent": percent,
+                    "timePos": time_pos
+                }));
+            }
+
+            match next_ep {
+                Some(next) => {
+                    current_ep = next;
+                    is_first_launch = false;
+                    let _ = app.emit("playback_episode_changed", serde_json::json!({ "epNum": next }));
+                }
+                None => break,
+            }
         }
     });
 
@@ -1205,9 +1287,31 @@ async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, Strin
 mod backend_helper_tests {
     use super::{
         advanced_search_query, all_time_popular_query, anicli_update_available,
-        popular_season_query, search_query, trending_query, upcoming_season_query,
-        usable_anilist_token, AIRING_SCHEDULE_QUERY, MEDIA_FIELDS,
+        navigation_target, parse_nav_action, popular_season_query, search_query,
+        trending_query, upcoming_season_query, usable_anilist_token, NavAction,
+        AIRING_SCHEDULE_QUERY, MEDIA_FIELDS,
     };
+
+    #[test]
+    fn parses_player_navigation_requests() {
+        assert_eq!(parse_nav_action(r#"{"action":"next","from":3}"#), Some(NavAction::Next));
+        assert_eq!(parse_nav_action(r#"{"action":"prev","from":3}"#), Some(NavAction::Prev));
+        assert_eq!(parse_nav_action(r#"{"action":"quit"}"#), None);
+        assert_eq!(parse_nav_action("not json"), None);
+    }
+
+    #[test]
+    fn navigation_stays_within_the_episode_range() {
+        assert_eq!(navigation_target(NavAction::Next, 3, 12), Some(4));
+        assert_eq!(navigation_target(NavAction::Next, 12, 12), None);
+        assert_eq!(navigation_target(NavAction::Prev, 3, 12), Some(2));
+        assert_eq!(navigation_target(NavAction::Prev, 1, 12), None);
+    }
+
+    #[test]
+    fn next_episode_is_unbounded_when_the_count_is_unknown() {
+        assert_eq!(navigation_target(NavAction::Next, 30, 0), Some(31));
+    }
 
     #[test]
     fn does_not_offer_an_older_release_as_an_update() {
@@ -1324,6 +1428,17 @@ pub fn run() {
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
+        })
+        .setup(|app| {
+            // Existing installs predate the player interface: fetch it in the
+            // background so the next playback picks it up. Best effort only.
+            let client = app.state::<AppState>().http.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = bootstrap::ensure_player_ui(&client, false, |_, _| {}).await {
+                    eprintln!("[anigui] player interface install failed: {e}");
+                }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_config,

@@ -32,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -43,9 +44,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/fbgs006/ani-gui/releases/latest/download/latest.json"
+        "https://github.com/fbgs006/AniGUI/releases/latest/download/latest.json"
       ],
-      "pubkey": "YOUR_PUBLIC_KEY_HERE"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzNDVFODJENUM5OTJFNTgKUldSWUxwbGNMZWhGb3dGVjlQNUhiZHptV0ZTeUxYS24wbldOTFEyNzU0Qy9mVm5wWTF1TFFNVlEK"
     }
   }
 }

@@ -23,6 +23,8 @@ cargo test --manifest-path src-tauri/Cargo.toml    # run Rust unit tests (in src
 
 There is no frontend test runner configured — TypeScript correctness is checked only via `tsc` during `npm run build`.
 
+Release bundles are signed for the in-app updater: the workflow needs the `TAURI_SIGNING_PRIVATE_KEY` repo secret (private key kept outside the repo), and `tauri.conf.json` carries the matching `pubkey` plus `bundle.createUpdaterArtifacts`. The updater feed is `releases/latest/download/latest.json`, which only exists once a release is *published* (not draft).
+
 CI (`.github/workflows/ci.yml`) runs on `windows-latest` and does exactly: `npm ci`, `npm run build`, `cargo check`. Releases (`.github/workflows/release.yml`) build on tag push via `tauri-apps/tauri-action`.
 
 ## Runtime dependencies (not npm/cargo packages)

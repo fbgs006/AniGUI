@@ -35,6 +35,7 @@ Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episod
 ### Setup & offline
 
 - **Zero-setup install (Windows):** No Scoop, no terminal, no manual `ani-cli`/`mpv` install — AniGUI downloads its own private runtime on first launch and runs everything without popping a console window.
+- **In-app updates:** AniGUI checks GitHub Releases on launch and shows an **Update Now** banner when a new version is out. Updates are cryptographically signed and verified before they're installed. (Also available from **Settings → Check for Updates**.)
 - **Download queue:** Queue multiple episodes; they download one at a time in the background with live progress and automatic retry.
 
 ## 📸 Screenshots
@@ -57,6 +58,8 @@ No prerequisites — just download and run.
 
 1. Download `AniGUI-setup.exe` (installer) or `AniGUI-Portable.exe` (portable, no installation needed).
 2. Run it. On first launch, AniGUI downloads its own private copy of `ani-cli`, `mpv`, `fzf`, and a portable Git Bash into `%APPDATA%\AniGUI\runtime\` (~150-200MB, one time only). It also fetches the player interface (uosc, ~8MB) into the bundled `mpv`. Nothing is added to your system PATH.
+
+AniGUI updates itself from here on — v2.2.0 is the first version with working in-app updates, so if you're on an older one, download it manually once.
 
 Updating from an older version? The player interface is downloaded automatically in the background the first time you launch the new version.
 
@@ -206,7 +209,7 @@ src/
 
 **CI/CD:**
 - Every push runs `npm run build` + `cargo check` on `windows-latest` as a fast correctness gate.
-- Every tag push (`v*`) builds full release bundles on **both** `windows-latest` and `ubuntu-22.04`, and publishes them as a draft GitHub Release.
+- Every tag push (`v*`) builds full release bundles on **both** `windows-latest` and `ubuntu-22.04`, signs them, and publishes them — plus the `latest.json` the in-app updater reads — as a draft GitHub Release. Signing needs the `TAURI_SIGNING_PRIVATE_KEY` repository secret (the matching public key is in `tauri.conf.json`).
 
 ---
 

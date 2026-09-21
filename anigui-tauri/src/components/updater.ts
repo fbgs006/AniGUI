@@ -27,9 +27,13 @@ export async function checkForUpdateManual() {
     return;
   }
   try {
-    const result = await invoke<{ available: boolean; version?: string } | null>('check_for_update');
+    const result = await invoke<{ available: boolean; version?: string; error?: string } | null>('check_for_update');
     if (result?.available && result.version) {
       showUpdateBanner(result.version);
+    } else if (result?.error) {
+      // The backend reports failures (no update feed, bad signature key…) as data,
+      // so don't tell the user they're up to date when the check never worked.
+      toast(`Couldn't check for updates: ${result.error}`, "error");
     } else {
       toast("You're on the latest version.", "success");
     }

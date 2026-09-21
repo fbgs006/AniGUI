@@ -1,23 +1,41 @@
 # AniGUI 🌸
 
-AniGUI is a premium, beautifully-designed desktop anime companion app that merges the lightning-fast CLI streaming of `ani-cli` with a gorgeous, modern graphical interface.
+AniGUI is a desktop anime companion app that pairs the lightning-fast CLI streaming of `ani-cli` with a modern graphical interface — and a player that behaves like the streaming apps you're used to.
 
-Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episodes directly on your desktop, and automatically sync your progress with your AniList account.
+Built with Tauri 2 and Rust, AniGUI lets you browse trending anime, watch episodes on your desktop with Netflix-style **Skip Opening / Next Episode** buttons, and automatically sync your progress with your AniList account.
 
 ## ✨ Features
 
-- **Cinematic UI:** A full art-first redesign — an icon rail replaces the old tab bar, a Home screen greets you with a full-bleed banner of whatever you're mid-episode on, and a dark, coral-accented theme runs through every screen.
-- **Zero-Setup Install (Windows):** No Scoop, no terminal, no manual `ani-cli`/`mpv` install — AniGUI downloads its own private runtime the first time you launch it, and runs everything without popping a visible console window.
-- **Real-Time Catalog:** Browse trending, highly-rated, and upcoming anime directly from AniList, or search the entire database instantly.
-- **Lightning Fast Playback:** Seamlessly streams episodes via `ani-cli` into a native `mpv` video player window.
-- **Download Queue:** Queue up multiple episodes at once — they download one at a time in the background with live per-item progress, and a failed download auto-retries before you ever have to touch it.
-- **Bulk List Management:** Multi-select shows on your AniList lists and move a batch from Watching to Dropped, mark a whole season watched in one click, or reshuffle your Planning list — no more clicking into each show individually.
-- **Local Watch-History Stats:** A stats view built from your own play history — episodes watched, approximate hours, most-rewatched show, and a top-genres breakdown — plus one-click CSV export.
-- **Exact-Second Resume:** Native Lua scripts track exactly where you close the player — reopen an episode and it resumes from the exact second you left off.
-- **Smart Auto-Sync (AniSkip integration):** Connect your AniList account and AniGUI will automatically update your progress when you finish an episode. Uses the AniSkip API to detect the ending song timestamp so your progress only syncs when you've genuinely finished.
-- **Advanced Browse Filtering:** Filter by 18 genres with multi-select support, plus year, season, format, and sort order. A live badge shows how many genres are active.
-- **6 Color Themes:** Coral (default), Purple, Crimson, Ocean, Emerald, and Monochrome — switch anytime from the Settings panel.
-- **Related Media:** Jump to prequels, sequels, spin-offs, and movies directly from any anime's detail page.
+### Watching
+
+- **A modern player interface:** AniGUI's bundled `mpv` ships with [uosc](https://github.com/tomasklaen/uosc) — a clean, themed control bar with a timeline, menus, subtitle/audio pickers, and previous/next-episode buttons, in AniGUI's coral colours.
+- **Netflix-style buttons:** A clickable **Skip Opening** button appears during the opening, and **Next Episode ▶** during the ending (or the final credits when no skip data exists). Powered by [AniSkip](https://api.aniskip.com). `Tab` does the same thing from the keyboard.
+- **Next / previous episode from the player:** Press `>` / `<` or use the buttons — no need to go back to the app.
+- **Autoplay:** When an episode plays through to its end, the next one starts automatically (can be turned off).
+- **Opens fullscreen:** The player launches fullscreen by default (can be turned off).
+- **Exact-second resume:** Reopen an episode and it picks up from the exact second you left off.
+- **Lightning-fast playback:** Episodes stream via `ani-cli` straight into `mpv`.
+
+### Keeping your list in sync
+
+- **Smart auto-sync:** Connect your AniList account and AniGUI updates your progress when you finish an episode. An episode counts as watched when you reach the ending (detected with AniSkip) **or** when you click Next Episode. Opening an episode and closing it early never counts.
+- **Live refresh:** The detail page updates the moment a sync lands — progress bar, "Play EP n" button, and watched chips.
+- **Local watch-history stats:** Episodes watched, approximate hours, most-rewatched show, and a top-genres breakdown — plus one-click CSV export.
+- **Bulk list management:** Multi-select shows and move a batch between lists, mark a whole season watched, or reshuffle your Planning list.
+
+### Discovering
+
+- **Cinematic UI:** An icon rail replaces the old tab bar, Home greets you with a full-bleed banner of what you're mid-episode on, and a dark theme runs through every screen.
+- **Real-time catalog:** Trending, highly-rated, and upcoming anime straight from AniList, plus instant search across the whole database.
+- **Advanced browse filtering:** 18 genres with multi-select, plus year, season, format, and sort order.
+- **Related media:** Jump to prequels, sequels, spin-offs, and movies from any detail page.
+- **Weekly airing calendar:** See what airs in the next 7 days.
+- **6 color themes:** Coral (default), Purple, Crimson, Ocean, Emerald, and Monochrome.
+
+### Setup & offline
+
+- **Zero-setup install (Windows):** No Scoop, no terminal, no manual `ani-cli`/`mpv` install — AniGUI downloads its own private runtime on first launch and runs everything without popping a console window.
+- **Download queue:** Queue multiple episodes; they download one at a time in the background with live progress and automatic retry.
 
 ## 📸 Screenshots
 
@@ -38,9 +56,13 @@ Every tagged release publishes builds for **both Windows and Linux** — check t
 No prerequisites — just download and run.
 
 1. Download `AniGUI-setup.exe` (installer) or `AniGUI-Portable.exe` (portable, no installation needed).
-2. Run it. On first launch, AniGUI downloads its own private copy of `ani-cli`, `mpv`, `fzf`, and a portable Git Bash into `%APPDATA%\AniGUI\runtime\` (~150-200MB, one time only). Nothing is added to your system PATH.
+2. Run it. On first launch, AniGUI downloads its own private copy of `ani-cli`, `mpv`, `fzf`, and a portable Git Bash into `%APPDATA%\AniGUI\runtime\` (~150-200MB, one time only). It also fetches the player interface (uosc, ~8MB) into the bundled `mpv`. Nothing is added to your system PATH.
+
+Updating from an older version? The player interface is downloaded automatically in the background the first time you launch the new version.
 
 Already have `ani-cli`/`mpv`/Git Bash installed and want AniGUI to use those instead? Click **"I already have these installed — skip"** on the setup screen, or set the path manually later (see [Settings](#️-settings)).
+
+> **Heads up:** the new player interface and its buttons live in AniGUI's *bundled* `mpv`. If **Bash / Git Bash Path** is set in Settings, AniGUI uses your own `mpv` instead and leaves its config untouched — clear the field to get the AniGUI player.
 
 ### Linux
 
@@ -127,18 +149,36 @@ This puts a native installer/portable build under `src-tauri/target/release/bund
 
 The left rail is your nav: **Home** (continue watching + plan-to-watch, or trending if you're not logged in), **Browse** (trending/seasonal/all-time, filterable by genre/year/format), **Watching** (jumps straight to whatever you're mid-episode on), **Week** (7-day airing calendar), **Offline** (downloaded files + the active download queue), and **You** (your AniList profile — Stats, History, and Manage).
 
-Press **?** anytime for the full keyboard-shortcut list.
+### Keyboard shortcuts
+
+Press **?** anytime for the full list.
+
+| In AniGUI | |
+|---|---|
+| `/` or `F` | Focus search |
+| `H` `B` `W` `C` `P` `D` | Home · Browse · Watching · Calendar · Profile · Downloads |
+| `Space` | Play next episode |
+| `Esc` | Close overlay / go back |
+
+| In the player (mpv) | |
+|---|---|
+| `Tab` | Skip opening / ending (or click the on-screen button) |
+| `>` / `<` | Next / previous episode |
 
 ## ⚙️ Settings
 
 Click **You → Settings** (or the ⚙ icon at the bottom of the rail):
 
 1. **AniList Token** — Click **Open AniList Login →** to get your token. Paste it here to enable sync, Home's continue-watching row, and bulk list management.
-2. **Bash / Git Bash Path** (Windows) — Leave blank to use AniGUI's bundled runtime (recommended), or point it at your own `bash.exe` to use a system-installed `ani-cli`/`mpv` instead.
+2. **Bash / Git Bash Path** (Windows) — Leave blank to use AniGUI's bundled runtime (recommended, and required for the AniGUI player interface), or point it at your own `bash.exe` to use a system-installed `ani-cli`/`mpv` instead.
 3. **Dependency Setup** (Windows) — Shows whether AniGUI is running on its bundled runtime or a system install, with a **Repair / Reinstall** button if something goes wrong.
 4. **Download Directory** — Choose where downloaded episodes are saved (defaults to `Downloads/AniGUI`).
-5. **Auto-Sync** — Toggle on to silently sync progress when you finish an episode. Leave off for a confirm prompt each time.
-6. **Theme** — Pick your preferred color theme.
+5. **Quality** — Preferred stream quality.
+6. **Auto-Sync** — Toggle on to silently sync progress when you finish an episode. Leave off for a confirm prompt each time.
+7. **Autoplay Next Episode** — Start the next episode when one plays to the end.
+8. **Open Player in Fullscreen** — Launch `mpv` fullscreen.
+9. **Play Dubbed** — Use the English dub instead of subs.
+10. **Theme** — Pick your preferred color theme.
 
 ## 🏗️ Architecture
 
@@ -146,11 +186,13 @@ Click **You → Settings** (or the ⚙ icon at the bottom of the rail):
 |---|---|
 | Frontend | TypeScript (modular — views/, components/), Vanilla CSS |
 | Backend | Rust (Tauri 2) |
-| Runtime bootstrap (Windows only) | Downloads a private `ani-cli`/`mpv`/`fzf`/Git Bash into `%APPDATA%\AniGUI\runtime\` on first launch (`src-tauri/src/bootstrap.rs`) |
+| Runtime bootstrap (Windows only) | Downloads a private `ani-cli`/`mpv`/`fzf`/Git Bash/uosc into `%APPDATA%\AniGUI\runtime\` (`src-tauri/src/bootstrap.rs`) |
 | Streaming | `ani-cli` via a `bash` shell command (spawned window-free) |
-| Player | `mpv` with embedded Lua scripts for resume tracking |
+| Player | `mpv` + uosc, with two Lua scripts: a resume/progress tracker and the AniGUI controls (`src-tauri/lua/anigui-controls.lua`: skip/next buttons, episode navigation, autoplay) |
 | Anime Data | AniList GraphQL API |
 | Skip Detection | AniSkip API |
+
+**How next/previous episode works:** each episode is its own `ani-cli` run, so the player script leaves a small request file and quits `mpv`; the backend reads it and relaunches the target episode, reporting each episode it played so progress and history stay accurate.
 
 **Frontend module structure:**
 ```

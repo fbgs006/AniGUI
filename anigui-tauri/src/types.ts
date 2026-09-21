@@ -51,6 +51,8 @@ export interface Config {
   theme: string;
   auto_sync: boolean;
   dub: boolean;
+  autoplay_next: boolean;
+  fullscreen: boolean;
   skip_auto_setup: boolean;
 }
 

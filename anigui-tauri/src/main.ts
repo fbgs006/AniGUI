@@ -11,7 +11,7 @@ import { state } from "./state";
 import { loadBrowse } from "./views/browse";
 import { loadDownloads } from "./views/downloads";
 import { loadHome, loadSearchResults, jumpToWatching } from "./views/home";
-import { resetPlayButtons, setPlayingEpisode } from "./views/detail";
+import { applySyncedProgress, resetPlayButtons, setPlayingEpisode } from "./views/detail";
 import { loadCalendar } from "./views/calendar";
 import { loadProfile } from "./views/profile";
 
@@ -106,20 +106,24 @@ async function init() {
   });
 
   await listen("playback_finished", async (event: any) => {
-    const { epNum, percent, timePos, elapsed } = event.payload;
+    const { animeId, epNum, percent, timePos, advanced } = event.payload;
+
+    // animeId/epNum come from the payload, not state.activePlayingAnimeId/Ep:
+    // player_closed (emitted first) resets those, and the player's next-episode
+    // button moves the episode on before this handler gets to run.
+    const playedMedia =
+      state.sidebarItems.find(m => m.id === animeId) ??
+      (state.selectedMedia?.id === animeId ? state.selectedMedia : undefined);
 
     // ── Local history (works without AniList login) ────────────────────────────
-    // epNum comes from the payload, not state.activePlayingEp: the player's
-    // next-episode button can move that on before this handler gets to run.
-    const histMedia = state.sidebarItems.find(m => m.id === state.activePlayingAnimeId) ?? state.selectedMedia;
-    if (histMedia) {
+    if (playedMedia) {
       const nowSec = Math.floor(Date.now() / 1000);
       try {
         await invoke("append_history", {
           entry: {
-            animeId:    histMedia.id,
-            animeTitle: histMedia.title.english || histMedia.title.romaji,
-            cover:      histMedia.coverImage.medium,
+            animeId:    playedMedia.id,
+            animeTitle: playedMedia.title.english || playedMedia.title.romaji,
+            cover:      playedMedia.coverImage.medium,
             epNum,
             watchedAt:  nowSec,
           }
@@ -129,18 +133,17 @@ async function init() {
 
     if (!state.config.anilist_token) return;
 
-    // Don't sync if the player was open for less than 60 seconds — prevents a
-    // false trigger when the user skips to the outro immediately after opening.
-    if ((elapsed ?? 0) < 60) return;
+    if (animeId == null) return;
 
-    // Capture IDs before any awaits — user may navigate during the AniSkip fetch.
-    const capturedAnimeId = state.activePlayingAnimeId;
+    const capturedAnimeId = animeId;
     const capturedEp = epNum;
 
-    let isFinished = percent > 0.85;
+    // Watched = the user asked for the next episode (`advanced`), or got near the
+    // outro. Time spent in the player doesn't matter: opening an episode and
+    // jumping to the end counts, opening it and closing it early doesn't.
+    let isFinished = advanced || percent > 0.85;
 
-    const playedMedia = state.sidebarItems.find(m => m.id === capturedAnimeId) ?? state.selectedMedia;
-    if (playedMedia?.idMal && timePos > 0) {
+    if (!advanced && playedMedia?.idMal && timePos > 0) {
       try {
         const res = await fetch(`https://api.aniskip.com/v2/skip-times/${playedMedia.idMal}/${epNum}?types=ed&episodeLength=0`);
         if (res.ok) {
@@ -159,6 +162,7 @@ async function init() {
       if (state.config.auto_sync) {
         try {
           await invoke("sync_progress", { mediaId: capturedAnimeId, epNum: capturedEp });
+          applySyncedProgress(capturedAnimeId, capturedEp);
           toast(`Auto-synced Episode ${capturedEp}`, "success");
         } catch (err: any) {
           toast(`Failed to auto-sync: ${err}`, "error");
@@ -208,19 +212,19 @@ window.addEventListener("DOMContentLoaded", init);
 // Usage: __testSync(), __testSync(5), __testSync(5, 0.92, 1335)
 
 if (import.meta.env.DEV) {
-  (window as any).__testSync = async (overrideEp?: number, overridePercent = 0.92, overrideTimePos = 1300) => {
+  (window as any).__testSync = async (overrideEp?: number, overridePercent = 0.92, overrideTimePos = 1300, advanced = false) => {
     if (!state.selectedMedia) {
       console.warn("[testSync] No anime selected. Click one in the sidebar first.");
       return;
     }
     const ep = overrideEp ?? (state.selectedMedia.mediaListEntry?.progress ?? 0) + 1;
-    console.info("[testSync] Simulating playback_finished →", { epNum: ep, percent: overridePercent, timePos: overrideTimePos, elapsed: 9999 }, "for:", state.selectedMedia.title.romaji);
+    console.info("[testSync] Simulating playback_finished →", { epNum: ep, percent: overridePercent, timePos: overrideTimePos, advanced }, "for:", state.selectedMedia.title.romaji);
     state.activePlayingAnimeId = state.selectedMedia.id;
     state.activePlayingEp = ep;
 
-    let isFinished = overridePercent > 0.85;
+    let isFinished = advanced || overridePercent > 0.85;
     const playedMedia = state.sidebarItems.find(m => m.id === state.selectedMedia!.id) ?? state.selectedMedia;
-    if (playedMedia?.idMal && overrideTimePos > 0) {
+    if (!advanced && playedMedia?.idMal && overrideTimePos > 0) {
       try {
         const res = await fetch(`https://api.aniskip.com/v2/skip-times/${playedMedia.idMal}/${ep}?types=ed&episodeLength=0`);
         if (res.ok) {
@@ -242,6 +246,7 @@ if (import.meta.env.DEV) {
       if (state.config.auto_sync) {
         try {
           await invoke("sync_progress", { mediaId: state.selectedMedia!.id, epNum: ep });
+          applySyncedProgress(state.selectedMedia!.id, ep);
           toast(`[DEV] Auto-synced Episode ${ep}`, "success");
           console.info("[testSync] Auto-sync fired successfully.");
         } catch (err) {

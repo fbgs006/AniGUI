@@ -13,6 +13,8 @@ export const state = {
     download_dir: "",
     theme: "coral",
     auto_sync: false,
+    autoplay_next: true,
+    fullscreen: true,
     skip_auto_setup: false,
   } as Config,
 

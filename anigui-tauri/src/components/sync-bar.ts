@@ -24,17 +24,8 @@ export function wireSyncBar() {
     state.pendingSyncAnimeId = null;
     try {
       await invoke("sync_progress", { mediaId: syncAnimeId, epNum: syncEp });
-      // Update local progress only if the user is still viewing the same anime
-      if (state.selectedMedia?.id === syncAnimeId) {
-        if (state.selectedMedia.mediaListEntry) {
-          state.selectedMedia.mediaListEntry.progress = syncEp;
-        } else {
-          state.selectedMedia.mediaListEntry = { id: 0, progress: syncEp, status: "CURRENT" };
-        }
-        // Re-render detail to reflect new progress
-        const { renderDetail } = await import('../views/detail');
-        renderDetail();
-      }
+      const { applySyncedProgress } = await import('../views/detail');
+      applySyncedProgress(syncAnimeId, syncEp);
       toast(`Synced EP ${syncEp}!`, "success");
     } catch (e: any) {
       toast("Sync failed: " + e, "error");

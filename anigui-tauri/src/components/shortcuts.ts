@@ -17,6 +17,23 @@ const SHORTCUTS = [
   { key: '?',       desc: 'Toggle this help' },
 ];
 
+// Handled by the mpv script (src-tauri/lua/anigui-controls.lua), not by this
+// file — listed here so the help overlay covers the player too.
+const PLAYER_SHORTCUTS = [
+  { key: 'Tab', desc: 'Skip opening / ending' },
+  { key: '>',   desc: 'Next episode' },
+  { key: '<',   desc: 'Previous episode' },
+];
+
+const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const shortcutRows = (list: { key: string; desc: string }[]) => list.map(s => `
+          <div class="shortcut-row">
+            <kbd class="shortcut-key">${s.key === ' ' ? 'Space' : escapeHtml(s.key)}</kbd>
+            <span class="shortcut-desc">${s.desc}</span>
+          </div>
+        `).join('');
+
 let overlayVisible = false;
 
 export function wireShortcuts() {
@@ -145,12 +162,9 @@ export function injectShortcutsOverlay() {
         <button class="shortcuts-close" id="shortcuts-close" aria-label="Close">✕</button>
       </div>
       <div class="shortcuts-grid">
-        ${SHORTCUTS.map(s => `
-          <div class="shortcut-row">
-            <kbd class="shortcut-key">${s.key === ' ' ? 'Space' : s.key}</kbd>
-            <span class="shortcut-desc">${s.desc}</span>
-          </div>
-        `).join('')}
+        ${shortcutRows(SHORTCUTS)}
+        <div class="shortcuts-section">In the player (mpv)</div>
+        ${shortcutRows(PLAYER_SHORTCUTS)}
       </div>
       <div class="shortcuts-footer">Press <kbd class="shortcut-key shortcut-key--sm">?</kbd> again to close</div>
     </div>

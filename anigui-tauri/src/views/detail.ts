@@ -105,6 +105,7 @@ export async function playEpisode(ep: number, triggerElement?: HTMLElement) {
   const result = await invoke<{ error?: string; success?: boolean }>("play_episode", {
     title,
     epNum: ep,
+    animeId: state.selectedMedia.id,
     malId: state.selectedMedia.idMal ?? null,
     totalEps: state.selectedMedia.episodes ?? 0,
   });
@@ -121,6 +122,25 @@ export function setPlayingEpisode(ep: number) {
   document.querySelectorAll(".ep-chip.playing-active").forEach(el => el.classList.remove("playing-active"));
   document.querySelector(`.ep-chip[data-ep="${ep}"]`)?.classList.add("playing-active");
   toast(`Now playing EP ${ep}`, "info");
+}
+
+/**
+ * Records `ep` as the new AniList progress for `animeId` everywhere it's shown,
+ * and redraws the detail page if it's on screen (the progress bar, the
+ * "Play EP n" button and the watched chips all derive from it).
+ */
+export function applySyncedProgress(animeId: number, ep: number) {
+  const apply = (m: Media) => {
+    if (m.mediaListEntry) m.mediaListEntry.progress = ep;
+    else m.mediaListEntry = { id: 0, progress: ep, status: "CURRENT" };
+  };
+
+  state.sidebarItems.filter(m => m.id === animeId).forEach(apply);
+  if (state.selectedMedia?.id !== animeId) return;
+  apply(state.selectedMedia);
+
+  // Don't yank the user back from another tab just because a sync landed.
+  if (document.querySelector("#main-panel .detail-hero")) renderDetail();
 }
 
 export function resetPlayButtons() {

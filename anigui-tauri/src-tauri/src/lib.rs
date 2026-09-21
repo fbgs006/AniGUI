@@ -21,6 +21,8 @@ pub(crate) struct Config {
     theme: Option<String>,
     auto_sync: Option<bool>,
     dub: Option<bool>,
+    autoplay_next: Option<bool>,
+    fullscreen: Option<bool>,
     pub(crate) skip_auto_setup: Option<bool>,
 }
 
@@ -442,6 +444,8 @@ fn get_config(state: State<AppState>) -> Value {
         "confirm_before_sync": cfg.confirm_before_sync.unwrap_or(true),
         "auto_sync": cfg.auto_sync.unwrap_or(false),
         "dub": cfg.dub.unwrap_or(false),
+        "autoplay_next": cfg.autoplay_next.unwrap_or(true),
+        "fullscreen": cfg.fullscreen.unwrap_or(true),
         "theme": cfg.theme.clone().unwrap_or_else(|| "coral".to_string()),
         "anilist_token": cfg.anilist_token.clone().unwrap_or_default(),
         "download_dir": cfg.download_dir.clone().unwrap_or_else(|| {
@@ -480,6 +484,12 @@ fn save_config(state: State<AppState>, config: Value) -> bool {
     }
     if let Some(v) = config.get("dub").and_then(|v| v.as_bool()) {
         cfg.dub = Some(v);
+    }
+    if let Some(v) = config.get("autoplay_next").and_then(|v| v.as_bool()) {
+        cfg.autoplay_next = Some(v);
+    }
+    if let Some(v) = config.get("fullscreen").and_then(|v| v.as_bool()) {
+        cfg.fullscreen = Some(v);
     }
     save_config_to_disk(&state.config_path, &cfg);
     true
@@ -611,6 +621,7 @@ fn play_episode(
     ep_num: i64,
     mal_id: Option<i64>,
     total_eps: Option<i64>,
+    anime_id: Option<i64>,
 ) -> Value {
     let cfg = state.config.lock().unwrap().clone();
     let bash = cfg.bash_path.clone().or_else(find_bash);
@@ -631,6 +642,8 @@ fn play_episode(
     }
 
     let total_eps = total_eps.unwrap_or(0);
+    let autoplay_next = cfg.autoplay_next.unwrap_or(true);
+    let fullscreen = cfg.fullscreen.unwrap_or(true);
 
     std::thread::spawn(move || {
         let safe_title = title.replace('"', "");
@@ -667,7 +680,9 @@ fn play_episode(
             command
                 .args(["-lc", &cmd])
                 .env("ANIGUI_EP", current_ep.to_string())
-                .env("ANIGUI_EP_TOTAL", total_eps.to_string());
+                .env("ANIGUI_EP_TOTAL", total_eps.to_string())
+                .env("ANIGUI_AUTOPLAY", if autoplay_next { "1" } else { "0" })
+                .env("ANIGUI_FULLSCREEN", if fullscreen { "1" } else { "0" });
             if let Some(id) = mal_id {
                 command.env("ANIGUI_MAL_ID", id.to_string());
             }
@@ -693,11 +708,13 @@ fn play_episode(
                 }
             }
 
-            let next_ep = nav_file
+            let nav_action = nav_file
                 .as_ref()
                 .and_then(|f| std::fs::read_to_string(f).ok())
-                .and_then(|raw| parse_nav_action(&raw))
-                .and_then(|action| navigation_target(action, current_ep, total_eps));
+                .and_then(|raw| parse_nav_action(&raw));
+            let next_ep = nav_action.and_then(|action| navigation_target(action, current_ep, total_eps));
+            // Asking for the next episode (button, key, or autoplay) means this one is done.
+            let advanced = nav_action == Some(NavAction::Next) && next_ep.is_some();
 
             if next_ep.is_none() {
                 *player_active.lock().unwrap() = false;
@@ -714,10 +731,12 @@ fn play_episode(
             // (ani-cli failed, or it was closed within seconds) wasn't watched.
             if token.is_some() && (is_first_launch || played) {
                 let _ = app.emit("playback_finished", serde_json::json!({
+                    "animeId": anime_id,
                     "epNum": current_ep,
                     "elapsed": elapsed,
                     "percent": percent,
-                    "timePos": time_pos
+                    "timePos": time_pos,
+                    "advanced": advanced
                 }));
             }
 

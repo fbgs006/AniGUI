@@ -16,6 +16,8 @@ export function openSettings() {
   (document.getElementById("s-quality") as HTMLSelectElement).value = state.config.quality || "best";
   (document.getElementById("s-autosync") as HTMLInputElement).checked = state.config.auto_sync || false;
   (document.getElementById("s-dub") as HTMLInputElement).checked = state.config.dub || false;
+  (document.getElementById("s-autoplay") as HTMLInputElement).checked = state.config.autoplay_next ?? true;
+  (document.getElementById("s-fullscreen") as HTMLInputElement).checked = state.config.fullscreen ?? true;
   document.getElementById("modal-settings")!.classList.add("open");
   refreshRuntimeStatusLine();
   refreshAppVersionLine();
@@ -60,6 +62,8 @@ export async function saveSettings() {
   state.config.quality       = (document.getElementById("s-quality") as HTMLSelectElement).value;
   state.config.auto_sync     = (document.getElementById("s-autosync") as HTMLInputElement).checked;
   state.config.dub           = (document.getElementById("s-dub") as HTMLInputElement).checked;
+  state.config.autoplay_next = (document.getElementById("s-autoplay") as HTMLInputElement).checked;
+  state.config.fullscreen    = (document.getElementById("s-fullscreen") as HTMLInputElement).checked;
 
   await invoke("save_config", { config: state.config });
 

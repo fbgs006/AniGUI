@@ -79,6 +79,18 @@
   gap: 10px;
 }
 
+.shortcuts-section {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
 .shortcut-key {
   display: inline-flex;
   align-items: center;

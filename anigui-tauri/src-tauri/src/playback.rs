@@ -5,7 +5,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::history::{read_in_progress, resume_position};
-use crate::shell::{find_bash, shell_command, spawn_bash_command};
+use crate::shell::{shell_command, spawn_bash_command};
 use crate::state::AppState;
 
 /// What the player's next/previous-episode button asked for (see
@@ -50,13 +50,13 @@ pub fn play_episode(
     anime_id: Option<i64>,
 ) -> Value {
     let cfg = state.config.lock().unwrap().clone();
-    let bash = cfg.bash_path.clone().or_else(find_bash);
+    let bash = cfg.bash();
 
     let Some(bash_path) = bash else {
         return serde_json::json!({ "error": "bash not found. Set it in Settings." });
     };
 
-    let quality = cfg.quality.clone().unwrap_or_else(|| "best".to_string());
+    let quality = cfg.quality();
     let player_active = state.player_active.clone();
     {
         let mut active = player_active.lock().unwrap();
@@ -67,11 +67,11 @@ pub fn play_episode(
     }
 
     let total_eps = total_eps.unwrap_or(0);
-    let autoplay_next = cfg.autoplay_next.unwrap_or(true);
-    let fullscreen = cfg.fullscreen.unwrap_or(true);
+    let autoplay_next = cfg.autoplay_next();
+    let fullscreen = cfg.fullscreen();
 
     std::thread::spawn(move || {
-        let dub_flag = if cfg.dub.unwrap_or(false) { " --dub" } else { "" };
+        let dub_flag = if cfg.dub() { " --dub" } else { "" };
         let data_dir = anigui_data_dir();
         let stats_file = data_dir.as_ref().map(|d| d.join("last_watched.json"));
         let nav_file = data_dir.as_ref().map(|d| d.join("nav.json"));

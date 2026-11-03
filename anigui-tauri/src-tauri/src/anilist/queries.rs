@@ -31,55 +31,31 @@ fragment mediaFields on Media {
 }
 "#;
 
-pub(crate) fn advanced_search_query() -> String {
+/// A page of anime cards. Every discovery list (Browse, Search) is built here,
+/// so each one gets the shared fields and the viewer's progress.
+///
+/// Open/Closed: a new list is a new call with its own `params`/`media_args`;
+/// this builder never has to change for it.
+fn media_page_query(params: &str, media_args: &str) -> String {
     format!(
-        r#"{} query ($search: String, $genres: [String], $year: Int, $season: MediaSeason, $format: MediaFormat, $sort: [MediaSort], $page: Int) {{
+        r#"{MEDIA_FIELDS} query ({params}) {{
   Page(page: $page, perPage: 20) {{
     pageInfo {{ hasNextPage }}
-    media(search: $search, genre_in: $genres, seasonYear: $year, season: $season, format: $format, type: ANIME, sort: $sort) {{
+    media({media_args}) {{
       ...mediaFields
       mediaListEntry {{ id progress status }}
     }}
   }}
-}}"#,
-        MEDIA_FIELDS
+}}"#
     )
 }
 
-pub(crate) fn search_query() -> String {
+/// One of the logged-in user's lists; `None` returns every list.
+fn user_list_query(status: Option<&str>) -> String {
+    let filter = status.map(|s| format!(", status: {s}")).unwrap_or_default();
     format!(
-        r#"{} query ($search: String, $page: Int) {{
-  Page(page: $page, perPage: 20) {{
-    pageInfo {{ hasNextPage }}
-    media(search: $search, type: ANIME, sort: SEARCH_MATCH) {{
-      ...mediaFields
-      mediaListEntry {{ id progress status }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
-
-pub(crate) fn trending_query() -> String {
-    format!(
-        r#"{} query ($page: Int) {{
-  Page(page: $page, perPage: 20) {{
-    pageInfo {{ hasNextPage }}
-    media(type: ANIME, sort: TRENDING_DESC) {{
-      ...mediaFields
-      mediaListEntry {{ id progress status }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
-
-pub(crate) fn current_query() -> String {
-    format!(
-        r#"{} query ($userId: Int) {{
-  MediaListCollection(userId: $userId, type: ANIME, status: CURRENT) {{
+        r#"{MEDIA_FIELDS} query ($userId: Int) {{
+  MediaListCollection(userId: $userId, type: ANIME{filter}) {{
     lists {{
       entries {{
         id
@@ -89,9 +65,48 @@ pub(crate) fn current_query() -> String {
       }}
     }}
   }}
-}}"#,
-        MEDIA_FIELDS
+}}"#
     )
+}
+
+pub(crate) fn advanced_search_query() -> String {
+    media_page_query(
+        "$search: String, $genres: [String], $year: Int, $season: MediaSeason, $format: MediaFormat, $sort: [MediaSort], $page: Int",
+        "search: $search, genre_in: $genres, seasonYear: $year, season: $season, format: $format, type: ANIME, sort: $sort",
+    )
+}
+
+pub(crate) fn search_query() -> String {
+    media_page_query("$search: String, $page: Int", "search: $search, type: ANIME, sort: SEARCH_MATCH")
+}
+
+pub(crate) fn trending_query() -> String {
+    media_page_query("$page: Int", "type: ANIME, sort: TRENDING_DESC")
+}
+
+/// Most popular shows of a season (this one, or an upcoming one).
+pub(crate) fn season_query() -> String {
+    media_page_query(
+        "$season: MediaSeason, $year: Int, $page: Int",
+        "type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC",
+    )
+}
+
+pub(crate) fn all_time_popular_query() -> String {
+    media_page_query("$page: Int", "type: ANIME, sort: POPULARITY_DESC")
+}
+
+pub(crate) fn current_query() -> String {
+    user_list_query(Some("CURRENT"))
+}
+
+pub(crate) fn planning_query() -> String {
+    user_list_query(Some("PLANNING"))
+}
+
+/// Every list entry (Watching/Planning/Paused/Dropped/Completed/Rewatching).
+pub(crate) fn all_lists_query() -> String {
+    user_list_query(None)
 }
 
 pub(crate) const UPDATE_MUTATION: &str = r#"
@@ -112,89 +127,6 @@ pub(crate) const DELETE_ENTRY_MUTATION: &str = r#"
 mutation ($id: Int) {
   DeleteMediaListEntry(id: $id) { deleted }
 }"#;
-
-pub(crate) fn popular_season_query() -> String {
-    format!(
-        r#"{} query ($season: MediaSeason, $year: Int, $page: Int) {{
-  Page(page: $page, perPage: 20) {{
-    pageInfo {{ hasNextPage }}
-    media(type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC) {{
-      ...mediaFields
-      mediaListEntry {{ id progress status }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
-
-pub(crate) fn upcoming_season_query() -> String {
-    format!(
-        r#"{} query ($season: MediaSeason, $year: Int, $page: Int) {{
-  Page(page: $page, perPage: 20) {{
-    pageInfo {{ hasNextPage }}
-    media(type: ANIME, season: $season, seasonYear: $year, sort: POPULARITY_DESC) {{
-      ...mediaFields
-      mediaListEntry {{ id progress status }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
-
-pub(crate) fn all_time_popular_query() -> String {
-    format!(
-        r#"{} query ($page: Int) {{
-  Page(page: $page, perPage: 20) {{
-    pageInfo {{ hasNextPage }}
-    media(type: ANIME, sort: POPULARITY_DESC) {{
-      ...mediaFields
-      mediaListEntry {{ id progress status }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
-
-pub(crate) fn planning_query() -> String {
-    format!(
-        r#"{} query ($userId: Int) {{
-  MediaListCollection(userId: $userId, type: ANIME, status: PLANNING) {{
-    lists {{
-      entries {{
-        id
-        progress
-        status
-        media {{ ...mediaFields }}
-      }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
-
-// No status filter — returns every list entry (Watching/Planning/Paused/Dropped/
-// Completed/Rewatching), used by the bulk list-management screen.
-pub(crate) fn all_lists_query() -> String {
-    format!(
-        r#"{} query ($userId: Int) {{
-  MediaListCollection(userId: $userId, type: ANIME) {{
-    lists {{
-      entries {{
-        id
-        progress
-        status
-        media {{ ...mediaFields }}
-      }}
-    }}
-  }}
-}}"#,
-        MEDIA_FIELDS
-    )
-}
 
 pub(crate) const MEDIA_GENRES_QUERY: &str = r#"
 query ($ids: [Int]) {
@@ -270,16 +202,22 @@ mod tests {
         let queries = [
             advanced_search_query(),
             all_time_popular_query(),
-            popular_season_query(),
+            season_query(),
             search_query(),
             trending_query(),
-            upcoming_season_query(),
             AIRING_SCHEDULE_QUERY.to_string(),
         ];
 
         for query in queries {
             assert!(query.contains("mediaListEntry"));
         }
+    }
+
+    #[test]
+    fn user_lists_filter_by_status_only_when_asked() {
+        assert!(current_query().contains("type: ANIME, status: CURRENT)"));
+        assert!(planning_query().contains("status: PLANNING"));
+        assert!(all_lists_query().contains("type: ANIME)"));
     }
 
     #[test]

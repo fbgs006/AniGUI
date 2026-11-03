@@ -4,7 +4,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::config::effective_download_dir;
-use crate::shell::{find_bash, kill_process_tree, shell_command, spawn_bash_command};
+use crate::shell::{kill_process_tree, shell_command, spawn_bash_command};
 use crate::state::AppState;
 
 /// ani-cli downloads with yt-dlp, or ffmpeg when yt-dlp is missing — neither
@@ -23,13 +23,13 @@ const NO_DOWNLOADER: &str = "Downloading needs yt-dlp or ffmpeg, and neither is 
 #[tauri::command]
 pub fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_num: i64) -> Value {
     let cfg = state.config.lock().unwrap().clone();
-    let bash = cfg.bash_path.clone().or_else(find_bash);
+    let bash = cfg.bash();
 
     let Some(bash_path) = bash else {
         return serde_json::json!({ "error": "bash not found" });
     };
 
-    let quality = cfg.quality.clone().unwrap_or_else(|| "best".to_string());
+    let quality = cfg.quality();
     let download_dir = effective_download_dir(&cfg);
     if let Err(e) = std::fs::create_dir_all(&download_dir) {
         return serde_json::json!({ "error": format!("Can't create the download folder: {e}") });
@@ -43,7 +43,7 @@ pub fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_
             let _ = app.emit("download_finished", serde_json::json!({ "success": false, "fatal": true, "error": NO_DOWNLOADER }));
             return;
         }
-        let dub_flag = if cfg.dub.unwrap_or(false) { " --dub" } else { "" };
+        let dub_flag = if cfg.dub() { " --dub" } else { "" };
         // Paths and titles go in as variables (see play_episode).
         let cmd = format!(
             r#"cd "$ANIGUI_DL_DIR" && ani-cli "$ANIGUI_TITLE" -S 1 -e {} -q "$ANIGUI_QUALITY"{} -d"#,

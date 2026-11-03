@@ -9,19 +9,21 @@ pub(crate) fn find_bash() -> Option<String> {
         return Some(bundled.to_string_lossy().to_string());
     }
 
-    let candidates = [
-        which::which("bash").ok().map(|p| p.to_string_lossy().to_string()),
-        Some(r"C:\Program Files\Git\bin\bash.exe".to_string()),
-        Some(r"C:\Program Files (x86)\Git\bin\bash.exe".to_string()),
-    ];
-    for c in &candidates {
-        if let Some(path) = c {
-            if std::path::Path::new(path).exists() {
-                return Some(path.clone());
-            }
-        }
-    }
-    None
+    system_bash_candidates()
+        .into_iter()
+        .find(|path| std::path::Path::new(path).exists())
+}
+
+/// Where a system bash usually is: on PATH, or a standard Git for Windows install.
+pub(crate) fn system_bash_candidates() -> Vec<String> {
+    let on_path = which::which("bash").ok().map(|p| p.to_string_lossy().to_string());
+    on_path
+        .into_iter()
+        .chain([
+            r"C:\Program Files\Git\bin\bash.exe".to_string(),
+            r"C:\Program Files (x86)\Git\bin\bash.exe".to_string(),
+        ])
+        .collect()
 }
 
 /// The `-lc` script for `cmd`, with the bundled runtime put on PATH first when

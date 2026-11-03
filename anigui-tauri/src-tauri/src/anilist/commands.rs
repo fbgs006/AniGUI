@@ -14,7 +14,7 @@ use tauri::State;
 use super::client::{viewer_id, AniListApi, HttpAniList};
 use super::queries::{
     advanced_search_query, all_lists_query, all_time_popular_query, current_query,
-    planning_query, popular_season_query, search_query, trending_query, upcoming_season_query,
+    planning_query, search_query, season_query, trending_query,
     AIRING_SCHEDULE_QUERY, DELETE_ENTRY_MUTATION, MEDIA_GENRES_QUERY, UPDATE_MUTATION,
     UPDATE_STATUS_MUTATION, USER_STATS_QUERY,
 };
@@ -60,13 +60,13 @@ pub async fn get_trending(state: State<'_, AppState>, page: Option<i64>) -> Resu
 #[tauri::command]
 pub async fn get_popular_this_season(state: State<'_, AppState>, season: String, year: i64, page: Option<i64>) -> Result<Value, String> {
     let vars = json!({ "season": season, "year": year, "page": page.unwrap_or(1) });
-    HttpAniList(&state.http).query(&popular_season_query(), vars, token(&state).as_deref()).await
+    HttpAniList(&state.http).query(&season_query(), vars, token(&state).as_deref()).await
 }
 
 #[tauri::command]
 pub async fn get_upcoming_season(state: State<'_, AppState>, season: String, year: i64, page: Option<i64>) -> Result<Value, String> {
     let vars = json!({ "season": season, "year": year, "page": page.unwrap_or(1) });
-    HttpAniList(&state.http).query(&upcoming_season_query(), vars, token(&state).as_deref()).await
+    HttpAniList(&state.http).query(&season_query(), vars, token(&state).as_deref()).await
 }
 
 #[tauri::command]

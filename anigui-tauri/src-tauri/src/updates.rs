@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::bootstrap;
-use crate::shell::{find_bash, shell_command, spawn_bash_command};
+use crate::shell::{shell_command, spawn_bash_command};
 use crate::state::AppState;
 
 // ─── App Info ─────────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ fn anicli_update_available(installed: &str, candidate: &str) -> bool {
 #[tauri::command]
 pub async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, String> {
     let cfg = state.config.lock().unwrap().clone();
-    let bash = cfg.bash_path.clone().or_else(find_bash);
+    let bash = cfg.bash();
 
     let Some(bash_path) = bash else {
         return Err("bash not found".to_string());
@@ -184,7 +184,7 @@ pub async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, S
 #[tauri::command]
 pub async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Value, String> {
     let cfg = state.config.lock().unwrap().clone();
-    let bash = cfg.bash_path.clone().or_else(find_bash);
+    let bash = cfg.bash();
 
     let Some(bash_path) = bash else {
         return Err("bash not found".to_string());

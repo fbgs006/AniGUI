@@ -46,8 +46,9 @@ One module per responsibility (Single Responsibility Principle — keep it that 
 |---|---|
 | `lib.rs` | Entry point only: builds `AppState`, registers commands |
 | `state.rs` | `AppState` |
-| `config.rs` | `Config`, its file on disk, `get_config`/`save_config` |
+| `config.rs` | `Config`, its file on disk, `get_config`/`save_config` driven by the `SETTINGS` table |
 | `shell.rs` | Finding/spawning bash, killing process trees |
+| `anicli.rs` | `AniCli`: the only builder of `ani-cli` commands (flags, env vars) |
 | `anilist/client.rs` | GraphQL transport (`anilist_query`, retries, expired token), `viewer_id` |
 | `anilist/queries.rs` | GraphQL documents only (no I/O) |
 | `anilist/commands.rs` | AniList-backed Tauri commands |
@@ -61,6 +62,11 @@ Dependency Inversion: logic that talks to AniList or to disk depends on a trait,
 - `anilist::client::AniListApi` — real: `HttpAniList(&state.http)`; tests: `anilist::client::fake::FakeAniList` (scripted replies, records every call). New AniList logic goes in a function taking `api: &impl AniListApi`, not `&AppState`.
 - `history::ListStore` — real: `JsonFile`; tests: an in-memory store.
 - Time is passed in (`fetch_airing_schedule(.., now, ..)`) rather than read inside the logic.
+
+Other SOLID conventions in the backend:
+- Open/Closed — a new setting is a `Config` field plus one `SETTINGS` line (a test fails if it's missing); read it through a `Config` accessor (`quality()`, `dub()`, `bash()`…), never by repeating its default. A new AniList card list is a `media_page_query(params, args)` call; a user list is `user_list_query(status)`.
+- Liskov — each trait documents its contract; `ListStore` implementations all run the shared `list_store_contract` test. Add any new implementation to it.
+- Interface Segregation — pass the narrowest input: `AniCli` (bash, quality, dub) instead of `Config`, `PlayerOptions` instead of `Config`, a download folder instead of `AppState`.
 
 - Commands live in the module that owns their responsibility and are registered by path (`history::get_history`) in the `invoke_handler![...]` list in `lib.rs`'s `run()` — new commands must be added there.
 - `AppState` holds the shared `Config` (Mutex-guarded, persisted to `%APPDATA%/anicli-gui/config.json`), a `player_active` flag preventing two simultaneous `mpv` launches, and a shared `reqwest::Client` (15s timeout) reused for all HTTP calls.

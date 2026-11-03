@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
+mod anicli;
 mod anilist;
 mod bootstrap;
 mod config;

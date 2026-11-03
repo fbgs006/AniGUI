@@ -103,82 +103,67 @@ fn anicli_update_available(installed: &str, candidate: &str) -> bool {
     false
 }
 
-#[tauri::command]
-pub async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, String> {
-    let cfg = state.config.lock().unwrap().clone();
-    let bash = cfg.bash();
+/// The version in `ani-cli -V` output ("ani-cli 4.9" or just "4.9"), or
+/// `None` when ani-cli isn't installed.
+fn parse_installed_version(output: &str) -> Option<String> {
+    let version = output.trim().replace("ani-cli", "").replace('v', "").trim().to_string();
+    (!version.is_empty() && version != "not-installed").then_some(version)
+}
 
-    let Some(bash_path) = bash else {
-        return Err("bash not found".to_string());
-    };
+/// The version of a GitHub "latest release" response, if it has one.
+fn parse_release_tag(release: &Value) -> Option<String> {
+    let tag = release["tag_name"].as_str()?.replace('v', "");
+    (!tag.is_empty()).then_some(tag)
+}
 
-    // Get local ani-cli version
-    let local_output = spawn_bash_command(&bash_path)
-        .args(["-lc", &shell_command("ani-cli -V 2>/dev/null || echo 'not-installed'")])
-        .output()
-        .map_err(|e| format!("Failed to run ani-cli: {}", e))?;
-
-    let local_raw = String::from_utf8_lossy(&local_output.stdout)
-        .trim()
-        .to_string();
-
-    // ani-cli -V typically prints something like "ani-cli 4.9" or just "4.9"
-    let local_version = local_raw
-        .replace("ani-cli", "")
-        .replace('v', "")
-        .trim()
-        .to_string();
-
-    if local_version.is_empty() || local_version == "not-installed" {
-        return Ok(serde_json::json!({
+/// What the ani-cli update banner shows.
+fn version_report(installed: Option<&str>, latest: Option<&str>) -> Value {
+    let Some(installed) = installed else {
+        return serde_json::json!({
             "installed": false,
             "local_version": null,
             "latest_version": null,
             "update_available": false
-        }));
-    }
+        });
+    };
+    serde_json::json!({
+        "installed": true,
+        "local_version": installed,
+        // Unknown latest (offline, rate-limited): don't nag the user.
+        "latest_version": latest,
+        // A different string is not necessarily a newer release: for example
+        // a local 5.1.1 build is already ahead of GitHub's v5.1 tag.
+        "update_available": latest.is_some_and(|l| anicli_update_available(installed, l))
+    })
+}
 
-    // Fetch latest release from GitHub, reusing the shared timeout-bounded client.
-    let latest = match state
-        .http
+async fn latest_anicli_release(http: &reqwest::Client) -> Option<String> {
+    let resp = http
         .get("https://api.github.com/repos/pystardust/ani-cli/releases/latest")
         .send()
         .await
-    {
-        Ok(resp) => {
-            if let Ok(json) = resp.json::<Value>().await {
-                json["tag_name"]
-                    .as_str()
-                    .unwrap_or("")
-                    .replace('v', "")
-                    .to_string()
-            } else {
-                String::new()
-            }
-        }
-        Err(_) => String::new(),
+        .ok()?;
+    parse_release_tag(&resp.json::<Value>().await.ok()?)
+}
+
+#[tauri::command]
+pub async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, String> {
+    let bash = state.config.lock().unwrap().bash();
+    let Some(bash_path) = bash else {
+        return Err("bash not found".to_string());
     };
 
-    if latest.is_empty() {
-        // Can't determine latest — don't nag the user
-        return Ok(serde_json::json!({
-            "installed": true,
-            "local_version": local_version,
-            "latest_version": null,
-            "update_available": false
-        }));
-    }
+    let output = spawn_bash_command(&bash_path)
+        .args(["-lc", &shell_command("ani-cli -V 2>/dev/null || echo 'not-installed'")])
+        .output()
+        .map_err(|e| format!("Failed to run ani-cli: {}", e))?;
+    let installed = parse_installed_version(&String::from_utf8_lossy(&output.stdout));
 
-    // A different string is not necessarily a newer release: for example a
-    // local 5.1.1 build is already ahead of GitHub's v5.1 tag.
-    let update_available = anicli_update_available(&local_version, &latest);
-
-    Ok(serde_json::json!({
-        "installed": true,
-        "local_version": local_version,
-        "latest_version": latest,
-        "update_available": update_available
-    }))
+    let latest = match &installed {
+        Some(_) => latest_anicli_release(&state.http).await,
+        None => None,
+    };
+    Ok(version_report(installed.as_deref(), latest.as_deref()))
 }
 
 #[tauri::command]
@@ -228,6 +213,31 @@ pub async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_installed_version() {
+        assert_eq!(parse_installed_version("ani-cli 4.9\n").as_deref(), Some("4.9"));
+        assert_eq!(parse_installed_version("v5.1.1").as_deref(), Some("5.1.1"));
+        assert_eq!(parse_installed_version("not-installed\n"), None);
+        assert_eq!(parse_installed_version("  "), None);
+    }
+
+    #[test]
+    fn reads_the_release_tag() {
+        assert_eq!(parse_release_tag(&serde_json::json!({ "tag_name": "v4.10" })).as_deref(), Some("4.10"));
+        assert_eq!(parse_release_tag(&serde_json::json!({ "message": "API rate limit exceeded" })), None);
+    }
+
+    #[test]
+    fn report_never_nags_without_a_known_latest_release() {
+        let report = version_report(Some("4.9"), None);
+        assert_eq!(report["installed"], true);
+        assert_eq!(report["latest_version"], Value::Null);
+        assert_eq!(report["update_available"], false);
+
+        assert_eq!(version_report(Some("4.9"), Some("4.10"))["update_available"], true);
+        assert_eq!(version_report(None, None)["installed"], false);
+    }
 
     #[test]
     fn does_not_offer_an_older_release_as_an_update() {

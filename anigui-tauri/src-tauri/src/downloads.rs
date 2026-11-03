@@ -1,18 +1,21 @@
 //! Downloading episodes with ani-cli, and managing the downloaded files.
 
+use std::path::{Path, PathBuf};
+
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::anicli::{AniCli, Mode};
 use crate::config::effective_download_dir;
-use crate::shell::{kill_process_tree, shell_command, spawn_bash_command};
+use crate::shell::kill_process_tree;
 use crate::state::AppState;
 
 /// ani-cli downloads with yt-dlp, or ffmpeg when yt-dlp is missing — neither
 /// ships with AniGUI's runtime, so check before queueing a download that can
 /// only fail.
-fn downloader_available(bash_path: &str) -> bool {
-    spawn_bash_command(bash_path)
-        .args(["-lc", &shell_command("command -v yt-dlp >/dev/null || command -v ffmpeg >/dev/null")])
+fn downloader_available(anicli: &AniCli) -> bool {
+    anicli
+        .script("command -v yt-dlp >/dev/null || command -v ffmpeg >/dev/null")
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -23,13 +26,10 @@ const NO_DOWNLOADER: &str = "Downloading needs yt-dlp or ffmpeg, and neither is 
 #[tauri::command]
 pub fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_num: i64) -> Value {
     let cfg = state.config.lock().unwrap().clone();
-    let bash = cfg.bash();
-
-    let Some(bash_path) = bash else {
+    let Some(anicli) = AniCli::from_config(&cfg) else {
         return serde_json::json!({ "error": "bash not found" });
     };
 
-    let quality = cfg.quality();
     let download_dir = effective_download_dir(&cfg);
     if let Err(e) = std::fs::create_dir_all(&download_dir) {
         return serde_json::json!({ "error": format!("Can't create the download folder: {e}") });
@@ -39,22 +39,12 @@ pub fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_
     std::thread::spawn(move || {
         // Checked here, not before spawning: it runs bash, and a sync command
         // would block the UI thread meanwhile. `fatal` tells the queue not to retry.
-        if !downloader_available(&bash_path) {
+        if !downloader_available(&anicli) {
             let _ = app.emit("download_finished", serde_json::json!({ "success": false, "fatal": true, "error": NO_DOWNLOADER }));
             return;
         }
-        let dub_flag = if cfg.dub() { " --dub" } else { "" };
-        // Paths and titles go in as variables (see play_episode).
-        let cmd = format!(
-            r#"cd "$ANIGUI_DL_DIR" && ani-cli "$ANIGUI_TITLE" -S 1 -e {} -q "$ANIGUI_QUALITY"{} -d"#,
-            ep_num, dub_flag
-        );
-
-        let mut child = match spawn_bash_command(&bash_path)
-            .args(["-lc", &shell_command(&cmd)])
-            .env("ANIGUI_DL_DIR", &download_dir)
-            .env("ANIGUI_TITLE", &title)
-            .env("ANIGUI_QUALITY", &quality)
+        let mut child = match anicli
+            .episode(&title, ep_num, Mode::Download { dir: &download_dir })
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -139,12 +129,15 @@ pub fn get_downloads(state: State<AppState>) -> Value {
     serde_json::json!(files)
 }
 
+fn download_dir(state: &AppState) -> PathBuf {
+    effective_download_dir(&state.config.lock().unwrap())
+}
+
 /// `path` if it's a video directly inside the download folder. The Offline
 /// screen only ever passes those; anything else is refused rather than letting
 /// the page open or delete arbitrary files.
-fn downloaded_video(state: &AppState, path: &str) -> Result<std::path::PathBuf, String> {
-    let dir = effective_download_dir(&state.config.lock().unwrap());
-    let dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+fn downloaded_video(download_dir: &Path, path: &str) -> Result<PathBuf, String> {
+    let dir = std::fs::canonicalize(download_dir).map_err(|e| e.to_string())?;
     let file = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
     let is_video = matches!(
         file.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
@@ -159,7 +152,7 @@ fn downloaded_video(state: &AppState, path: &str) -> Result<std::path::PathBuf, 
 
 #[tauri::command]
 pub fn play_local_file(state: State<AppState>, path: String) -> Result<Value, String> {
-    let path = downloaded_video(&state, &path)?;
+    let path = downloaded_video(&download_dir(&state), &path)?;
     match open::that(&path) {
         Ok(_) => Ok(serde_json::json!({ "success": true })),
         Err(e) => Err(e.to_string()),
@@ -168,9 +161,36 @@ pub fn play_local_file(state: State<AppState>, path: String) -> Result<Value, St
 
 #[tauri::command]
 pub fn delete_local_file(state: State<AppState>, path: String) -> Result<Value, String> {
-    let path = downloaded_video(&state, &path)?;
+    let path = downloaded_video(&download_dir(&state), &path)?;
     match std::fs::remove_file(&path) {
         Ok(_) => Ok(serde_json::json!({ "success": true })),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_videos_directly_in_the_download_folder_are_accepted() {
+        let root = std::env::temp_dir().join(format!("anigui-test-{}-downloads", std::process::id()));
+        let dir = root.join("AniGUI");
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        for f in ["ep1.mkv", "EP2.MP4", "notes.txt", "nested/ep3.mkv"] {
+            std::fs::write(dir.join(f), "").unwrap();
+        }
+        std::fs::write(root.join("outside.mkv"), "").unwrap();
+        let check = |f: &Path| downloaded_video(&dir, f.to_str().unwrap()).is_ok();
+
+        assert!(check(&dir.join("ep1.mkv")));
+        assert!(check(&dir.join("EP2.MP4")));
+        assert!(!check(&dir.join("notes.txt")), "not a video");
+        assert!(!check(&dir.join("nested/ep3.mkv")), "not directly inside");
+        assert!(!check(&root.join("outside.mkv")), "outside the folder");
+        assert!(!check(&dir.join("..").join("outside.mkv")), "no escaping with ..");
+        assert!(!check(&dir.join("missing.mkv")));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

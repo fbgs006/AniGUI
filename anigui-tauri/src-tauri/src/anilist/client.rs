@@ -11,6 +11,12 @@ use serde_json::Value;
 /// Dependency Inversion: the commands depend on this abstraction, not on
 /// `reqwest` or the real server. Production passes `HttpAniList`; tests pass
 /// `fake::FakeAniList`, so the command logic is testable offline.
+///
+/// Contract (Liskov: callers must not care which implementation they got):
+/// - `Ok` holds the whole GraphQL response, so callers read `res["data"]...`;
+/// - a GraphQL or network failure is an `Err` with a message fit for the UI,
+///   never an `Ok` carrying an `errors` array;
+/// - a blank or `None` token means an anonymous request.
 pub(crate) trait AniListApi: Sync {
     fn query(
         &self,

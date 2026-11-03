@@ -9,10 +9,16 @@ use serde_json::Value;
 ///
 /// Dependency Inversion: the history logic below only knows this trait, not
 /// the file system. The app uses `JsonFile`; tests use an in-memory store.
+///
+/// Contract every implementation keeps (Liskov: any store can stand in for
+/// another; `list_store_contract` in the tests checks each one):
+/// - nothing stored yet, or unreadable data, loads as an empty list;
+/// - after `save` returns true, `load` returns exactly that list;
+/// - `save` replaces the whole list, it never appends;
+/// - neither method panics.
 pub(crate) trait ListStore {
-    /// The stored list; missing or unreadable data reads as empty.
     fn load(&self) -> Vec<Value>;
-    /// Replaces the stored list. Returns whether it was written.
+    /// Returns whether the list was written.
     fn save(&self, list: &[Value]) -> bool;
 }
 
@@ -178,15 +184,49 @@ mod tests {
         assert_eq!(store.load(), vec![serde_json::json!({ "animeId": 2 })]);
     }
 
-    #[test]
-    fn json_file_round_trips_and_tolerates_a_missing_file() {
-        let dir = std::env::temp_dir().join(format!("anigui-test-{}", std::process::id()));
-        let file = JsonFile(dir.join("sub").join("list.json"));
-        assert!(file.load().is_empty());
+    /// The `ListStore` contract, checked the same way on every implementation.
+    fn list_store_contract(store: &impl ListStore) {
+        assert!(store.load().is_empty(), "a new store is empty");
 
-        let list = vec![serde_json::json!({ "animeId": 1 })];
-        assert!(file.save(&list), "creates missing folders");
-        assert_eq!(file.load(), list);
+        let two = vec![serde_json::json!({ "animeId": 1 }), serde_json::json!({ "animeId": 2 })];
+        assert!(store.save(&two));
+        assert_eq!(store.load(), two, "load returns what was saved");
+
+        let one = vec![serde_json::json!({ "animeId": 3 })];
+        assert!(store.save(&one));
+        assert_eq!(store.load(), one, "save replaces, never appends");
+
+        assert!(store.save(&[]));
+        assert!(store.load().is_empty());
+    }
+
+    /// A file path no other test uses, under the system temp folder.
+    fn temp_file(test: &str) -> (PathBuf, JsonFile) {
+        let dir = std::env::temp_dir().join(format!("anigui-test-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = JsonFile(dir.join("sub").join("list.json"));
+        (dir, file)
+    }
+
+    #[test]
+    fn memory_store_keeps_the_contract() {
+        list_store_contract(&MemoryStore::default());
+    }
+
+    #[test]
+    fn json_file_keeps_the_contract() {
+        // Its folder doesn't exist yet: the first save must create it.
+        let (dir, file) = temp_file("contract");
+        list_store_contract(&file);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn json_file_reads_a_corrupt_file_as_empty() {
+        let (dir, file) = temp_file("corrupt");
+        file.save(&[]);
+        std::fs::write(&file.0, "{ not json").unwrap();
+        assert!(file.load().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

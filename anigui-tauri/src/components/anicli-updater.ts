@@ -52,6 +52,8 @@ function showAniCliBanner(
   }
 
   banner.classList.add('show');
+  if (banner.dataset.wired) return;
+  banner.dataset.wired = '1';
 
   const updateBtn = document.getElementById('anicli-update-btn');
   const dismissBtn = document.getElementById('anicli-dismiss-btn');

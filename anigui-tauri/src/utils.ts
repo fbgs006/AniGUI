@@ -1,5 +1,37 @@
 // ─── DOM & Season Utilities ───────────────────────────────────────────────────
 
+import { ask } from '@tauri-apps/plugin-dialog';
+
+/**
+ * Escapes text for interpolation into innerHTML, both in element content and
+ * in quoted attributes. Everything that comes from AniList (titles, genres,
+ * descriptions) or from disk must go through this.
+ */
+export function esc(s: string | number | null | undefined): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/**
+ * Dims images that fail to load. Replaces per-image inline `onerror`
+ * attributes, which the CSP (no inline scripts) blocks.
+ */
+export function wireImageFallback() {
+  document.addEventListener('error', (e) => {
+    if (e.target instanceof HTMLImageElement) e.target.style.opacity = '0.3';
+  }, true);
+}
+
+/** Native yes/no dialog for destructive actions. */
+export async function confirmAction(message: string, okLabel = 'Delete'): Promise<boolean> {
+  try {
+    return await ask(message, { title: 'AniGUI', kind: 'warning', okLabel, cancelLabel: 'Cancel' });
+  } catch {
+    return window.confirm(message);
+  }
+}
+
 export const $ = <T extends HTMLElement>(sel: string, parent: ParentNode = document) =>
   parent.querySelector<T>(sel)!;
 

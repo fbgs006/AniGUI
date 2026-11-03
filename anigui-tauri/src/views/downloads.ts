@@ -3,7 +3,7 @@ import './downloads.css';
 
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
-import { setActiveNav } from '../utils';
+import { confirmAction, esc, setActiveNav } from '../utils';
 import { toast } from '../components/toast';
 import { renderQueuePanel } from '../components/download-queue';
 
@@ -15,6 +15,7 @@ function formatSize(bytes: number): string {
 
 export async function loadDownloads() {
   state.currentTab = "downloads";
+  state.selectedMedia = null;
   setActiveNav("btn-downloads");
 
   const main = document.getElementById("main-panel")!;
@@ -68,18 +69,18 @@ export async function loadDownloads() {
     for (const [anime, eps] of Object.entries(groups)) {
       eps.sort((a, b) => (parseInt(a.epNum) || 0) - (parseInt(b.epNum) || 0));
       html += `<div class="download-group">
-        <div class="download-group-title" data-search-title="${anime.replace(/"/g, '&quot;')}">${anime}</div>
+        <div class="download-group-title" data-search-title="${esc(anime)}">${esc(anime)}</div>
         <div class="download-items">`;
       for (const ep of eps) {
         html += `
           <div class="download-item">
             <div class="download-info" style="display:flex;align-items:center;">
-              <span class="download-ep-num">Episode ${ep.epNum}</span>
+              <span class="download-ep-num">Episode ${esc(ep.epNum)}</span>
               <span class="download-size">${formatSize(ep.size)}</span>
             </div>
             <div class="download-actions">
-              <button class="btn btn-primary btn-play-dl" data-path="${ep.path}">▶ Play</button>
-              <button class="btn btn-outline btn-del-dl" data-path="${ep.path}">🗑 Delete</button>
+              <button class="btn btn-primary btn-play-dl" data-path="${esc(ep.path)}">▶ Play</button>
+              <button class="btn btn-outline btn-del-dl" data-path="${esc(ep.path)}" data-name="${esc(ep.name)}">🗑 Delete</button>
             </div>
           </div>`;
       }
@@ -96,12 +97,17 @@ export async function loadDownloads() {
 
     main.querySelectorAll(".btn-play-dl").forEach(b => b.addEventListener("click", async (e) => {
       const path = (e.currentTarget as HTMLElement).dataset.path!;
-      await invoke("play_local_file", { path });
+      try {
+        await invoke("play_local_file", { path });
+      } catch (err) {
+        toast(`Couldn't open the file: ${err}`, "error");
+      }
     }));
 
     main.querySelectorAll(".btn-del-dl").forEach(b => b.addEventListener("click", async (e) => {
-      const path = (e.currentTarget as HTMLElement).dataset.path!;
       const btn = e.currentTarget as HTMLButtonElement;
+      const path = btn.dataset.path!;
+      if (!await confirmAction(`Delete "${btn.dataset.name}" from your computer?`)) return;
       btn.disabled = true;
       btn.textContent = "Deleting...";
       try {
@@ -115,7 +121,7 @@ export async function loadDownloads() {
     }));
 
   } catch (err) {
-    main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load downloads: ${err}</p></div>`;
+    main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load downloads: ${esc(String(err))}</p></div>`;
   }
 }
 
@@ -130,9 +136,10 @@ async function searchAndLoad(title: string) {
       const { selectMedia } = await import('./detail');
       selectMedia(result.data.Page.media[0]);
     } else {
-      main.innerHTML = `<div class="downloads-empty"><h2>Not Found</h2><p>Could not find ${title} on AniList.</p></div>`;
+      main.innerHTML = `<div class="downloads-empty"><h2>Not Found</h2><p>Could not find ${esc(title)} on AniList.</p></div>`;
     }
   } catch (e) {
-    console.error(e);
+    toast(`Search failed: ${e}`, "error");
+    loadDownloads();
   }
 }

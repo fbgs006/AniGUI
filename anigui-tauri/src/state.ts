@@ -34,11 +34,15 @@ export const state = {
 
   // Auth
   viewerName: null as string | null,
+  viewerAvatar: null as string | null,
 
   // Playback
   playLaunching:       false,
   activePlayingAnimeId: null as number | null,
   activePlayingEp:      null as number | null,
+  // What's in the player — playback_finished may arrive after the user has
+  // navigated away from its detail page.
+  playingMedia:         null as Media | null,
 
   // Downloads
   downloadQueue: [] as DownloadQueueItem[],

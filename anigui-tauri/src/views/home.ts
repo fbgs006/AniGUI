@@ -3,18 +3,57 @@ import './home.css';
 
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
-import type { Media } from '../types';
-import { el, setActiveNav } from '../utils';
+import type { InProgressEntry, Media } from '../types';
+import { el, setActiveNav, esc } from '../utils';
 import { toast } from '../components/toast';
+import { showLoadError } from './browse';
+import { formatClock, getInProgress, relativeTime, removeInProgress } from '../watch-progress';
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 function collectEntries(lists: any[]): Media[] {
   return lists.flatMap((l: any) =>
     l.entries.map((e: any) => ({ ...e.media, mediaListEntry: { id: e.id, progress: e.progress, status: e.status } }))
   );
+}
+
+// ─── Local Continue-watching ──────────────────────────────────────────────────
+// Entries from in_progress.json: shows started on this machine, including
+// episodes left part-way through, which AniList never hears about.
+
+// The media to play/open for a local entry: the AniList copy when there is one,
+// since it carries the viewer's current list progress.
+function entryMedia(entry: InProgressEntry, fresh: Media[]): Media {
+  return fresh.find(m => m.id === entry.animeId) ?? entry.media;
+}
+
+/**
+ * Local entries still worth showing next to the AniList lists: one AniList
+ * already has at or past `ep` was caught up elsewhere and is stale.
+ */
+function liveLocalEntries(local: InProgressEntry[], fresh: Media[]): InProgressEntry[] {
+  return local.filter(e => {
+    const progress = fresh.find(f => f.id === e.animeId)?.mediaListEntry?.progress ?? 0;
+    return progress < e.ep;
+  });
+}
+
+// play_episode resumes at the saved position on its own (see resume_position in lib.rs).
+async function resumeEntry(media: Media, ep: number, trigger?: HTMLElement) {
+  state.selectedMedia = media;
+  state.selectedEp = null;
+  const { playEpisode } = await import('./detail');
+  playEpisode(ep, trigger);
+}
+
+function entryPercent(entry: InProgressEntry): number {
+  return entry.duration ? Math.min(100, Math.round((entry.timePos / entry.duration) * 100)) : 0;
+}
+
+function resumeLabel(entry: InProgressEntry): string {
+  if (!entry.timePos) return 'Up next';
+  return entry.duration
+    ? `${formatClock(entry.timePos)} / ${formatClock(entry.duration)}`
+    : `Stopped at ${formatClock(entry.timePos)}`;
 }
 
 // ─── Card Renderers ───────────────────────────────────────────────────────────
@@ -28,7 +67,7 @@ function drawContinueCard(media: Media): HTMLElement {
   const card = el('div', 'home-card');
   card.innerHTML = `
     <div class="home-card-art">
-      <img src="${media.coverImage.large || media.coverImage.medium}" alt="" loading="lazy" onerror="this.style.opacity=0.3"/>
+      <img src="${esc(media.coverImage.large || media.coverImage.medium)}" alt="" loading="lazy"/>
       <div class="home-card-bar"><div class="home-card-bar-fill" style="width:${pct}%"></div></div>
       <span class="home-card-ep">${progress ? `EP ${progress}` : 'New'}</span>
     </div>
@@ -42,6 +81,35 @@ function drawContinueCard(media: Media): HTMLElement {
   return card;
 }
 
+// Clicking the art resumes playback; clicking the title opens the detail page.
+function drawResumeCard(entry: InProgressEntry, fresh: Media[]): HTMLElement {
+  const media = entryMedia(entry, fresh);
+  const title = media.title.english || media.title.romaji;
+  const card = el('div', 'home-card');
+  card.innerHTML = `
+    <div class="home-card-art">
+      <img src="${esc(media.bannerImage || media.coverImage.large || media.coverImage.medium)}" alt="" loading="lazy"/>
+      <div class="home-card-play">▶</div>
+      <button class="home-card-dismiss" title="Remove from this list">✕</button>
+      <div class="home-card-bar"><div class="home-card-bar-fill" style="width:${entryPercent(entry)}%"></div></div>
+      <span class="home-card-ep">EP ${entry.ep}</span>
+    </div>
+    <div class="home-card-title">${esc(title)}</div>
+    <div class="home-card-meta">${resumeLabel(entry)} · ${relativeTime(entry.updatedAt)}</div>
+  `;
+  card.querySelector('.home-card-art')!.addEventListener('click', () => resumeEntry(media, entry.ep));
+  card.querySelector('.home-card-title')!.addEventListener('click', async () => {
+    const { selectMedia } = await import('./detail');
+    selectMedia(media);
+  });
+  card.querySelector('.home-card-dismiss')!.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await removeInProgress(entry.animeId);
+    refreshHomeIfShown();
+  });
+  return card;
+}
+
 function drawPosterCard(media: Media): HTMLElement {
   const card = el('article', 'browse-card');
   const title = media.title.english || media.title.romaji;
@@ -49,7 +117,7 @@ function drawPosterCard(media: Media): HTMLElement {
   const format = media.format?.replace('_', ' ') ?? 'Anime';
   const episodes = media.episodes ? `${media.episodes} eps` : 'Coming soon';
   card.innerHTML = `
-    <img src="${media.coverImage.large || media.coverImage.medium}" alt="${esc(title)}" loading="lazy" onerror="this.style.opacity=0.3" />
+    <img src="${esc(media.coverImage.large || media.coverImage.medium)}" alt="${esc(title)}" loading="lazy" />
     <div class="browse-card-overlay">
       <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${score}%</span>` : ''}<span>${format}</span></div>
       <span class="browse-card-title">${esc(title)}</span>
@@ -63,21 +131,67 @@ function drawPosterCard(media: Media): HTMLElement {
   return card;
 }
 
+// ─── Shared Sections ──────────────────────────────────────────────────────────
+
+/** Hero for the most recently watched local entry. */
+function renderResumeHero(entry: InProgressEntry, media: Media) {
+  const main = document.getElementById('main-panel')!;
+  const title = media.title.english || media.title.romaji;
+  const pct = entryPercent(entry);
+  const blurb = entry.timePos
+    ? `Episode ${entry.ep} — stopped at ${formatClock(entry.timePos)}${entry.duration ? ` of ${formatClock(entry.duration)}` : ''}. Pick up right where you left off.`
+    : `Episode ${entry.ep} is up next.`;
+  main.innerHTML = `
+    <section class="home-hero fade-in" style="background-image:url('${esc(media.bannerImage || media.coverImage.large)}')">
+      <div class="home-hero-scrim"></div>
+      <div class="home-hero-body">
+        <span class="home-kicker">Continue watching · ${relativeTime(entry.updatedAt)}</span>
+        <h1>${esc(title)}</h1>
+        <p>${blurb}</p>
+        <div class="home-hero-actions">
+          <button class="btn btn-primary" id="home-resume-btn">▶ ${entry.timePos ? 'Resume' : 'Play'} EP ${entry.ep}</button>
+          <button class="btn btn-outline" id="home-all-eps-btn">All episodes</button>
+        </div>
+        ${pct ? `<div class="home-hero-progress"><div class="home-hero-progress-fill" style="width:${pct}%"></div></div>` : ''}
+      </div>
+    </section>
+    <div class="home-rows" id="home-rows"></div>
+  `;
+  document.getElementById('home-resume-btn')?.addEventListener('click', (e) =>
+    resumeEntry(media, entry.ep, e.currentTarget as HTMLElement));
+  document.getElementById('home-all-eps-btn')?.addEventListener('click', async () => {
+    const { selectMedia } = await import('./detail');
+    selectMedia(media);
+  });
+}
+
+function appendResumeRow(rows: HTMLElement, entries: InProgressEntry[], fresh: Media[]) {
+  if (!entries.length) return;
+  const section = el('section', 'home-section fade-in');
+  section.innerHTML = `<div class="home-section-header"><span class="home-section-title">Pick up where you left off</span><span class="browse-count">${entries.length} show${entries.length !== 1 ? 's' : ''}</span></div><div class="home-scroll"></div>`;
+  const scroll = section.querySelector<HTMLElement>('.home-scroll')!;
+  entries.forEach(e => scroll.appendChild(drawResumeCard(e, fresh)));
+  rows.appendChild(section);
+}
+
 // ─── Home Screen ──────────────────────────────────────────────────────────────
 
-export async function loadHome() {
+export async function loadHome(quiet = false) {
   setActiveNav('btn-home');
   state.selectedMedia = null;
   const main = document.getElementById('main-panel')!;
-  main.innerHTML = `<div class="browse-loading"><div class="spinner"></div><span>Loading home…</span></div>`;
+  if (!quiet) main.innerHTML = `<div class="browse-loading"><div class="spinner"></div><span>Loading home…</span></div>`;
+
+  const local = await getInProgress();
 
   if (!state.config.anilist_token) {
     try {
       const data = await invoke<any>('get_trending', { page: 1 });
       const items: Media[] = data?.data?.Page?.media ?? [];
-      renderLoggedOut(items);
+      renderLoggedOut(items, local);
     } catch (e: any) {
-      main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load: ${e}</p></div>`;
+      if (local.length) renderLoggedOut([], local);
+      else showLoadError(main, `Couldn't reach AniList: ${e}`, () => loadHome());
     }
     return;
   }
@@ -93,17 +207,36 @@ export async function loadHome() {
     const planningItems = planRes.status === 'fulfilled'
       ? collectEntries(planRes.value?.data?.MediaListCollection?.lists ?? [])
       : [];
-    renderLoggedIn(continueItems, planningItems);
+    // Both lists failing is an error (offline, expired login), not an empty list.
+    if (cwRes.status === 'rejected' && planRes.status === 'rejected') {
+      if (!local.length) return showLoadError(main, `Couldn't load your AniList lists: ${cwRes.reason}`, () => loadHome());
+      toast(`Couldn't load your AniList lists: ${cwRes.reason}`, 'error');
+    }
+    renderLoggedIn(continueItems, planningItems, local);
   } catch (e: any) {
-    main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load: ${e}</p></div>`;
+    showLoadError(main, `Failed to load: ${e}`, () => loadHome());
   }
 }
 
-function renderLoggedIn(continueItems: Media[], planningItems: Media[]) {
-  const main = document.getElementById('main-panel')!;
-  state.sidebarItems = [...continueItems, ...planningItems];
+/** Redraws Home or Watching in place (no spinner) after the lists changed, if one is on screen. */
+export function refreshHomeIfShown() {
+  if (state.selectedMedia) return;
+  if (document.getElementById('watching-page')) loadWatching(true);
+  else if (document.getElementById('home-rows')) loadHome(true);
+}
 
-  if (!continueItems.length) {
+function renderLoggedIn(continueItems: Media[], planningItems: Media[], local: InProgressEntry[]) {
+  const main = document.getElementById('main-panel')!;
+  const fresh = [...continueItems, ...planningItems];
+  const localEntries = liveLocalEntries(local, fresh);
+  const localIds = new Set(localEntries.map(e => e.animeId));
+  // AniList shows already in the local row aren't repeated under "Back in rotation".
+  const rotation = continueItems.filter(m => !localIds.has(m.id));
+  state.sidebarItems = [...localEntries.map(e => entryMedia(e, fresh)), ...fresh.filter(m => !localIds.has(m.id))];
+
+  if (localEntries.length) {
+    renderResumeHero(localEntries[0], entryMedia(localEntries[0], fresh));
+  } else if (!continueItems.length) {
     main.innerHTML = `
       <div class="home-empty-hero fade-in">
         <span class="home-kicker">WELCOME BACK</span>
@@ -122,7 +255,7 @@ function renderLoggedIn(continueItems: Media[], planningItems: Media[]) {
     const pct = eps ? Math.round((progress / eps) * 100) : 0;
 
     main.innerHTML = `
-      <section class="home-hero fade-in" style="background-image:url('${hero.bannerImage || hero.coverImage.large}')">
+      <section class="home-hero fade-in" style="background-image:url('${esc(hero.bannerImage || hero.coverImage.large)}')">
         <div class="home-hero-scrim"></div>
         <div class="home-hero-body">
           <span class="home-kicker">Continue watching · episode ${progress} of ${eps || '?'}</span>
@@ -138,12 +271,8 @@ function renderLoggedIn(continueItems: Media[], planningItems: Media[]) {
       <div class="home-rows" id="home-rows"></div>
     `;
 
-    document.getElementById('home-resume-btn')?.addEventListener('click', async (e) => {
-      state.selectedMedia = hero;
-      state.selectedEp = null;
-      const { playEpisode } = await import('./detail');
-      playEpisode(nextEp, e.currentTarget as HTMLElement);
-    });
+    document.getElementById('home-resume-btn')?.addEventListener('click', (e) =>
+      resumeEntry(hero, nextEp, e.currentTarget as HTMLElement));
     document.getElementById('home-all-eps-btn')?.addEventListener('click', async () => {
       const { selectMedia } = await import('./detail');
       selectMedia(hero);
@@ -154,11 +283,13 @@ function renderLoggedIn(continueItems: Media[], planningItems: Media[]) {
 
   const rows = document.getElementById('home-rows')!;
 
-  if (continueItems.length) {
+  appendResumeRow(rows, localEntries, fresh);
+
+  if (rotation.length) {
     const section = el('section', 'home-section fade-in');
-    section.innerHTML = `<div class="home-section-header"><span class="home-section-title">Back in rotation</span><span class="browse-count">${continueItems.length} shows watching</span></div><div class="home-scroll"></div>`;
+    section.innerHTML = `<div class="home-section-header"><span class="home-section-title">Back in rotation</span><span class="browse-count">${rotation.length} shows watching</span></div><div class="home-scroll"></div>`;
     const scroll = section.querySelector<HTMLElement>('.home-scroll')!;
-    continueItems.forEach(m => scroll.appendChild(drawContinueCard(m)));
+    rotation.forEach(m => scroll.appendChild(drawContinueCard(m)));
     rows.appendChild(section);
   }
 
@@ -170,33 +301,40 @@ function renderLoggedIn(continueItems: Media[], planningItems: Media[]) {
     rows.appendChild(section);
   }
 
-  if (!continueItems.length && !planningItems.length) {
+  if (!localEntries.length && !continueItems.length && !planningItems.length) {
     rows.innerHTML = `<div class="browse-empty">Nothing on your lists yet. Head to Browse to find something to watch.</div>`;
   }
 }
 
-function renderLoggedOut(trendingItems: Media[]) {
+function renderLoggedOut(trendingItems: Media[], local: InProgressEntry[]) {
   const main = document.getElementById('main-panel')!;
-  state.sidebarItems = trendingItems;
-  main.innerHTML = `
-    <section class="home-empty-hero fade-in">
-      <span class="home-kicker">WELCOME TO ANIGUI</span>
-      <h1>Track, stream and download anime — all from one desktop app.</h1>
-      <p>Log in with AniList to sync progress across devices, or just start browsing.</p>
-      <div class="home-hero-actions">
-        <button class="btn btn-primary" id="home-login-cta">Log in with AniList</button>
-        <button class="btn btn-outline" id="home-browse-cta">◳ Browse anime</button>
-      </div>
-    </section>
-    <div class="home-rows" id="home-rows"></div>
-  `;
-  document.getElementById('home-login-cta')?.addEventListener('click', async () => {
-    const { openSettings } = await import('../components/settings');
-    openSettings();
-  });
-  document.getElementById('home-browse-cta')?.addEventListener('click', () => document.getElementById('btn-browse')?.click());
+  const localIds = new Set(local.map(e => e.animeId));
+  state.sidebarItems = [...local.map(e => e.media), ...trendingItems.filter(m => !localIds.has(m.id))];
+
+  if (local.length) {
+    renderResumeHero(local[0], local[0].media);
+  } else {
+    main.innerHTML = `
+      <section class="home-empty-hero fade-in">
+        <span class="home-kicker">WELCOME TO ANIGUI</span>
+        <h1>Track, stream and download anime — all from one desktop app.</h1>
+        <p>Log in with AniList to sync progress across devices, or just start browsing.</p>
+        <div class="home-hero-actions">
+          <button class="btn btn-primary" id="home-login-cta">Log in with AniList</button>
+          <button class="btn btn-outline" id="home-browse-cta">◳ Browse anime</button>
+        </div>
+      </section>
+      <div class="home-rows" id="home-rows"></div>
+    `;
+    document.getElementById('home-login-cta')?.addEventListener('click', async () => {
+      const { openSettings } = await import('../components/settings');
+      openSettings();
+    });
+    document.getElementById('home-browse-cta')?.addEventListener('click', () => document.getElementById('btn-browse')?.click());
+  }
 
   const rows = document.getElementById('home-rows')!;
+  appendResumeRow(rows, local, []);
   if (trendingItems.length) {
     const section = el('section', 'home-section fade-in');
     section.innerHTML = `<div class="home-section-header"><span class="home-section-title">Trending now</span><span class="browse-count">${trendingItems.length} titles</span></div><div class="browse-scroll"></div>`;
@@ -234,28 +372,69 @@ export async function loadSearchResults(query: string) {
   }
 }
 
-// ─── "Watching" Rail Shortcut ─────────────────────────────────────────────────
-// Jumps straight to the detail page of whatever's on top of the continue-watching
-// list — a shortcut to existing detail/resume functionality, not a new screen.
+// ─── Watching Page ────────────────────────────────────────────────────────────
+// Everything in progress: shows left part-way on this machine (they carry the
+// exact resume point), then the rest of the AniList "Watching" list.
 
-export async function jumpToWatching() {
-  if (!state.config.anilist_token) {
-    toast("Log in with AniList to track what you're watching.", 'info');
-    return loadHome();
-  }
+export async function loadWatching(quiet = false) {
   setActiveNav('btn-watching');
+  state.selectedMedia = null;
   const main = document.getElementById('main-panel')!;
-  main.innerHTML = `<div class="browse-loading"><div class="spinner"></div><span>Loading…</span></div>`;
-  try {
-    const data = await invoke<any>('get_continue_watching');
-    const items = collectEntries(data?.data?.MediaListCollection?.lists ?? []);
-    if (!items.length) {
-      toast('Nothing in progress — showing Home instead.', 'info');
-      return loadHome();
+  if (!quiet) main.innerHTML = `<div class="browse-loading"><div class="spinner"></div><span>Loading what you're watching…</span></div>`;
+
+  const local = await getInProgress();
+  let anilist: Media[] = [];
+  let listError: unknown = null;
+  if (state.config.anilist_token) {
+    try {
+      const data = await invoke<any>('get_continue_watching');
+      anilist = collectEntries(data?.data?.MediaListCollection?.lists ?? []);
+    } catch (e) {
+      listError = e;
     }
-    const { selectMedia } = await import('./detail');
-    selectMedia(items[0]);
-  } catch (e: any) {
-    toast(`Failed to load: ${e}`, 'error');
+  }
+  if (listError && !local.length) {
+    return showLoadError(main, `Couldn't load your AniList list: ${listError}`, () => loadWatching());
+  }
+  if (listError) toast(`Couldn't load your AniList list: ${listError}`, 'error');
+
+  const localEntries = state.config.anilist_token ? liveLocalEntries(local, anilist) : local;
+  const localIds = new Set(localEntries.map(e => e.animeId));
+  const rest = anilist.filter(m => !localIds.has(m.id));
+  state.sidebarItems = [...localEntries.map(e => entryMedia(e, anilist)), ...rest];
+  const total = localEntries.length + rest.length;
+
+  main.innerHTML = `
+    <div class="watching-page fade-in" id="watching-page">
+      <header class="watching-header">
+        <span class="home-kicker">Watching</span>
+        <h1>What you're watching</h1>
+        <p>${total ? `${total} show${total !== 1 ? 's' : ''} in progress.` : 'Nothing in progress yet.'}</p>
+      </header>
+      <div class="home-rows" id="watching-rows"></div>
+    </div>`;
+  const rows = document.getElementById('watching-rows')!;
+
+  if (!total) {
+    rows.innerHTML = `<div class="browse-empty">${state.config.anilist_token
+      ? 'Start an episode, or mark a show as Watching on its page, and it will show up here.'
+      : 'Start an episode and it will show up here. Log in with AniList to see your whole Watching list.'}</div>`;
+    return;
+  }
+
+  if (localEntries.length) {
+    const section = el('section', 'home-section');
+    section.innerHTML = `<div class="home-section-header"><span class="home-section-title">Pick up where you left off</span><span class="browse-count">${localEntries.length} show${localEntries.length !== 1 ? 's' : ''}</span></div><div class="watching-grid"></div>`;
+    const grid = section.querySelector<HTMLElement>('.watching-grid')!;
+    localEntries.forEach(e => grid.appendChild(drawResumeCard(e, anilist)));
+    rows.appendChild(section);
+  }
+
+  if (rest.length) {
+    const section = el('section', 'home-section');
+    section.innerHTML = `<div class="home-section-header"><span class="home-section-title">On your AniList list</span><span class="browse-count">${rest.length} show${rest.length !== 1 ? 's' : ''}</span></div><div class="watching-grid"></div>`;
+    const grid = section.querySelector<HTMLElement>('.watching-grid')!;
+    rest.forEach(m => grid.appendChild(drawContinueCard(m)));
+    rows.appendChild(section);
   }
 }

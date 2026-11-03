@@ -13,7 +13,7 @@ const SHORTCUTS = [
   { key: 'P',       desc: 'Open Profile' },
   { key: 'D',       desc: 'Open Downloads' },
   { key: 'Space',   desc: 'Play next episode' },
-  { key: 'Esc',     desc: 'Close overlay / go back' },
+  { key: 'Esc',     desc: 'Close overlay / dialog' },
   { key: '?',       desc: 'Toggle this help' },
 ];
 
@@ -59,10 +59,6 @@ function handleKey(e: KeyboardEvent) {
       if (overlayVisible) { closeOverlay(); break; }
       // Close any open modal
       document.querySelectorAll<HTMLElement>('.modal-overlay.open').forEach(m => m.classList.remove('open'));
-      // Close Browse / Calendar / Profile → go back to detail or welcome
-      if (state.selectedMedia) {
-        import('../views/detail').then(({ renderDetail }) => renderDetail());
-      }
       break;
 
     case '/':
@@ -110,11 +106,17 @@ function handleKey(e: KeyboardEvent) {
 
     case ' ':
       if (overlayVisible) break;
-      if (!state.selectedMedia) break;
+      // Only from a show's own page: elsewhere selectedMedia can be a show the
+      // user looked at earlier and has since navigated away from.
+      if (!state.selectedMedia || !document.querySelector('#main-panel .detail-hero')) break;
       e.preventDefault();
-      const progress = state.selectedMedia.mediaListEntry?.progress ?? 0;
-      const nextEp = progress + 1;
-      import('../views/detail').then(({ playEpisode }) => playEpisode(nextEp));
+      const media = state.selectedMedia;
+      const nextEp = (media.mediaListEntry?.progress ?? 0) + 1;
+      import('../views/detail').then(({ playEpisode, availableEpisodes }) => {
+        const total = availableEpisodes(media);
+        if (total && nextEp > total) return;
+        playEpisode(nextEp);
+      });
       break;
   }
 }

@@ -38,18 +38,19 @@ html, body, #app {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
 
-/* ─── App Layout (rail + content column) ─────────────────────────────────── */
+/* ─── App Layout (banners, then rail + content column) ───────────────────── */
+/* Update banners sit above #app in normal flow, so showing one shrinks the
+   app instead of pushing it past the bottom of the window or overlapping it. */
+body {
+  display: flex;
+  flex-direction: column;
+}
 #app {
+  flex: 1;
+  min-height: 0;
+  height: auto;
   display: flex;
   align-items: stretch;
-}
-
-.update-banner.show ~ #app,
-.anicli-update-banner.show ~ #app {
-  margin-top: 40px;
-}
-.update-banner.show ~ .anicli-update-banner.show ~ #app {
-  margin-top: 80px;
 }
 
 /* ─── Icon Rail ───────────────────────────────────────────────────────────── */
@@ -129,14 +130,19 @@ html, body, #app {
 }
 .rail-icon-btn:hover { color: var(--text); border-color: var(--accent); background: var(--accent-dim); }
 
-.rail-avatar-deco {
+.rail-avatar {
   width: 34px; height: 34px;
+  padding: 0;
   border-radius: 50%;
   margin-top: 6px;
-  background: repeating-linear-gradient(135deg, var(--bg4) 0 4px, var(--bg3) 4px 8px);
+  background: var(--bg3) center / cover no-repeat;
   border: 1px solid var(--border);
   flex-shrink: 0;
+  cursor: pointer;
+  transition: border-color 0.2s;
 }
+.rail-avatar:hover { border-color: var(--accent); }
+.rail-avatar[hidden] { display: none; }
 
 /* ─── Content Column ──────────────────────────────────────────────────────── */
 .content-col {
@@ -148,8 +154,8 @@ html, body, #app {
 
 /* ─── Update Banner ───────────────────────────────────────────────────────── */
 .update-banner {
-  position: absolute;
-  top: 0; left: 0; right: 0;
+  position: relative;
+  flex-shrink: 0;
   height: 40px;
   background: linear-gradient(90deg, rgba(255,95,77,0.1), rgba(126,232,187,0.1));
   border-bottom: 1px solid rgba(255,95,77,0.3);
@@ -157,21 +163,17 @@ html, body, #app {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  transform: translateY(-100%);
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   z-index: 150;
 }
-.update-banner.show {
-  transform: translateY(0);
-}
+.update-banner:not(.show) { display: none; }
 .update-icon { font-size: 14px; }
 .update-label { font-size: 13px; font-weight: 600; color: var(--text); }
 .update-banner .btn-sm { font-size: 11px; padding: 4px 10px; }
 
 /* ─── Ani-CLI Update Banner ──────────────────────────────────────────────── */
 .anicli-update-banner {
-  position: absolute;
-  top: 0; left: 0; right: 0;
+  position: relative;
+  flex-shrink: 0;
   height: 40px;
   background: linear-gradient(90deg, rgba(255,209,102,0.12), rgba(255,209,102,0.08));
   border-bottom: 1px solid rgba(255,209,102,0.35);
@@ -179,16 +181,9 @@ html, body, #app {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  transform: translateY(-100%);
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
   z-index: 149;
 }
-.anicli-update-banner.show {
-  transform: translateY(0);
-}
-.update-banner.show ~ .anicli-update-banner.show {
-  top: 40px;
-}
+.anicli-update-banner:not(.show) { display: none; }
 .anicli-update-icon { font-size: 14px; }
 .anicli-update-label { font-size: 13px; font-weight: 600; color: var(--text); }
 .anicli-update-banner .btn-sm { font-size: 11px; padding: 4px 10px; }
@@ -245,6 +240,7 @@ html, body, #app {
   flex-shrink: 0;
 }
 .topbar-status:hover { border-color: var(--accent); }
+.topbar-status:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .topbar-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(126,232,187,.7); flex-shrink: 0; }
 .topbar-status span:last-child { font: 500 11.5px 'DM Sans', sans-serif; color: var(--green); }
 .topbar-status:not(.logged-in) { background: var(--bg3); border-color: var(--border); }
@@ -412,16 +408,17 @@ html, body, #app {
 /* ─── Sync Confirm Bar ────────────────────────────────────────────────────── */
 .sync-confirm {
   position: fixed; bottom: 24px; left: 50%;
-  transform: translateX(-50%) translateY(80px);
+  transform: translateX(-50%) translateY(calc(100% + 40px));
+  visibility: hidden;
   background: var(--bg2); border: 1px solid var(--accent);
   border-radius: var(--radius); padding: 16px 20px;
   display: flex; align-items: center; gap: 14px;
   box-shadow: var(--shadow);
   z-index: 900;
-  transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), visibility 0s linear 0.3s;
   white-space: nowrap;
 }
-.sync-confirm.show { transform: translateX(-50%) translateY(0); }
+.sync-confirm.show { transform: translateX(-50%) translateY(0); visibility: visible; transition-delay: 0s; }
 .sync-confirm p { font-size: 13px; color: var(--text2); }
 .sync-confirm strong { color: var(--text); }
 
@@ -465,3 +462,14 @@ body[data-theme="crimson"]    { --accent: #ff4757; --accent2: #ff6b81; --accent-
 body[data-theme="ocean"]      { --accent: #1e90ff; --accent2: #70a1ff; --accent-dim: rgba(30,144,255,0.16); }
 body[data-theme="emerald"]    { --accent: #2ed573; --accent2: #7bed9f; --accent-dim: rgba(46,213,115,0.16); }
 body[data-theme="monochrome"] { --accent: #a4b0be; --accent2: #ced6e0; --accent-dim: rgba(164,176,190,0.16); }
+
+/* ─── Native <select> popups ─────────────────────────────────────────────── */
+/* WebView2 draws the open list with the OS theme; colouring the options keeps
+   it readable and on-brand in the filters and Settings. */
+select option {
+  background: var(--bg2);
+  color: var(--text);
+}
+
+/* ─── Load error with retry ──────────────────────────────────────────────── */
+.load-error .btn { margin-top: 4px; }

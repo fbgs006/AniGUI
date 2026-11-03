@@ -30,6 +30,10 @@ pub(crate) struct AppState {
     pub(crate) config: Mutex<Config>,
     pub(crate) config_path: std::path::PathBuf,
     player_active: Arc<Mutex<bool>>,
+    /// PID of the running download's bash process, so it can be cancelled.
+    download_pid: Arc<Mutex<Option<u32>>>,
+    /// (token, viewer id) — see `viewer_id`.
+    viewer: Mutex<Option<(String, i64)>>,
     pub(crate) http: reqwest::Client,
 }
 
@@ -41,6 +45,26 @@ fn get_config_path() -> std::path::PathBuf {
 fn get_history_path() -> std::path::PathBuf {
     let base = dirs_next::config_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default());
     base.join("anicli-gui").join("history.json")
+}
+
+/// Shows started but not finished (local "continue watching"), one entry per
+/// anime, newest first. Written by the frontend after each episode.
+fn get_in_progress_path() -> std::path::PathBuf {
+    let base = dirs_next::config_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default());
+    base.join("anicli-gui").join("in_progress.json")
+}
+
+/// Where downloads go when the user hasn't picked a folder.
+fn default_download_dir() -> std::path::PathBuf {
+    dirs_next::download_dir().unwrap_or_default().join("AniGUI")
+}
+
+fn effective_download_dir(cfg: &Config) -> std::path::PathBuf {
+    cfg.download_dir
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_download_dir)
 }
 
 fn load_config_from_disk(path: &std::path::Path) -> Config {
@@ -84,6 +108,28 @@ fn find_bash() -> Option<String> {
     None
 }
 
+/// Settings used to pre-fill the bash field with the auto-detected path, so
+/// saving them stored it as a manual override — which then kept a system Git
+/// Bash in use (without the bundled runtime on PATH) after AniGUI installed its
+/// own. Drops such an override when it's just a standard Git install location.
+fn clear_autosaved_bash_path(cfg: &mut Config) -> bool {
+    if !bootstrap::bundled_bash_path().exists() {
+        return false;
+    }
+    let auto_candidates = [
+        which::which("bash").ok().map(|p| p.to_string_lossy().to_string()),
+        Some(r"C:\Program Files\Git\bin\bash.exe".to_string()),
+        Some(r"C:\Program Files (x86)\Git\bin\bash.exe".to_string()),
+    ];
+    let is_auto = cfg.bash_path.as_deref().is_some_and(|saved| {
+        auto_candidates.iter().flatten().any(|c| c.eq_ignore_ascii_case(saved))
+    });
+    if is_auto {
+        cfg.bash_path = None;
+    }
+    is_auto
+}
+
 /// The `-lc` script for `cmd`, with the bundled runtime put on PATH first when
 /// needed (see `bootstrap::shell_path_prefix` for why this can't be an env var).
 fn shell_command(cmd: &str) -> String {
@@ -122,10 +168,37 @@ fn usable_anilist_token(token: Option<&str>) -> Option<&str> {
     token.map(str::trim).filter(|token| !token.is_empty())
 }
 
+/// AniList answers an expired or revoked token with this error, even on
+/// queries that need no login at all.
+fn is_invalid_token_error(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("invalid token")
+}
+
+const EXPIRED_LOGIN: &str = "Your AniList login has expired — log in again in Settings.";
+
 async fn anilist_query(
     client: &reqwest::Client,
     query: &str,
     variables: Value,
+    token: Option<&str>,
+) -> Result<Value, String> {
+    match anilist_query_once(client, query, &variables, token).await {
+        // A bad token must not take public data (Browse, Search, Calendar) down
+        // with it: retry anonymously, and only report the expired login if the
+        // query genuinely needed it.
+        Err(e) if usable_anilist_token(token).is_some() && is_invalid_token_error(&e) => {
+            anilist_query_once(client, query, &variables, None)
+                .await
+                .map_err(|_| EXPIRED_LOGIN.to_string())
+        }
+        other => other,
+    }
+}
+
+async fn anilist_query_once(
+    client: &reqwest::Client,
+    query: &str,
+    variables: &Value,
     token: Option<&str>,
 ) -> Result<Value, String> {
     let body = serde_json::json!({
@@ -202,6 +275,7 @@ fragment mediaFields on Media {
   id
   idMal
   title { romaji english }
+  format
   episodes
   averageScore
   status
@@ -274,6 +348,20 @@ fn trending_query() -> String {
 
 const VIEWER_QUERY: &str = "query { Viewer { id } }";
 
+/// The logged-in user's id, looked up once per token: every list query needs
+/// it, and asking AniList each time doubled the request count.
+async fn viewer_id(state: &AppState, token: &str) -> Result<i64, String> {
+    if let Some((cached_token, id)) = state.viewer.lock().unwrap().clone() {
+        if cached_token == token {
+            return Ok(id);
+        }
+    }
+    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(token)).await?;
+    let id = viewer["data"]["Viewer"]["id"].as_i64().ok_or("Could not get user ID")?;
+    *state.viewer.lock().unwrap() = Some((token.to_string(), id));
+    Ok(id)
+}
+
 fn current_query() -> String {
     format!(
         r#"{} query ($userId: Int) {{
@@ -304,6 +392,11 @@ mutation ($mediaId: Int, $status: MediaListStatus) {
   SaveMediaListEntry(mediaId: $mediaId, status: $status) {
     id progress status
   }
+}"#;
+
+const DELETE_ENTRY_MUTATION: &str = r#"
+mutation ($id: Int) {
+  DeleteMediaListEntry(id: $id) { deleted }
 }"#;
 
 fn popular_season_query() -> String {
@@ -402,6 +495,7 @@ query ($ids: [Int]) {
 const AIRING_SCHEDULE_QUERY: &str = r#"
 query ($airingAtGreater: Int, $airingAtLesser: Int, $page: Int) {
   Page(page: $page, perPage: 50) {
+    pageInfo { hasNextPage }
     airingSchedules(airingAt_greater: $airingAtGreater, airingAt_lesser: $airingAtLesser, sort: TIME) {
       episode
       airingAt
@@ -443,9 +537,13 @@ query ($userId: Int) {
 #[tauri::command]
 fn get_config(state: State<AppState>) -> Value {
     let cfg = state.config.lock().unwrap();
-    let bash = cfg.bash_path.clone().or_else(find_bash);
+    // `bash_path`/`download_dir` are the user's own overrides (empty = automatic).
+    // The automatic values are sent separately so Settings can show them as a
+    // hint without saving them back as if the user had chosen them.
     serde_json::json!({
-        "bash_path": bash.unwrap_or_default(),
+        "bash_path": cfg.bash_path.clone().unwrap_or_default(),
+        "detected_bash_path": find_bash().unwrap_or_default(),
+        "default_download_dir": default_download_dir().to_string_lossy(),
         "quality": cfg.quality.clone().unwrap_or_else(|| "best".to_string()),
         "confirm_before_sync": cfg.confirm_before_sync.unwrap_or(true),
         "auto_sync": cfg.auto_sync.unwrap_or(false),
@@ -454,12 +552,7 @@ fn get_config(state: State<AppState>) -> Value {
         "fullscreen": cfg.fullscreen.unwrap_or(true),
         "theme": cfg.theme.clone().unwrap_or_else(|| "coral".to_string()),
         "anilist_token": cfg.anilist_token.clone().unwrap_or_default(),
-        "download_dir": cfg.download_dir.clone().unwrap_or_else(|| {
-            dirs_next::download_dir()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-        }),
+        "download_dir": cfg.download_dir.clone().unwrap_or_default(),
         "skip_auto_setup": cfg.skip_auto_setup.unwrap_or(false)
     })
 }
@@ -542,10 +635,7 @@ async fn get_continue_watching(state: State<'_, AppState>) -> Result<Value, Stri
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in".to_string())?;
 
-    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
-    let user_id = viewer["data"]["Viewer"]["id"]
-        .as_i64()
-        .ok_or("Could not get user ID")?;
+    let user_id = viewer_id(&state, &token).await?;
 
     anilist_query(
         &state.http,
@@ -570,15 +660,27 @@ async fn sync_progress(state: State<'_, AppState>, media_id: i64, ep_num: i64) -
 }
 
 #[tauri::command]
-async fn update_status(state: State<'_, AppState>, media_id: i64, status: String) -> Result<Value, String> {
+async fn update_status(
+    state: State<'_, AppState>,
+    media_id: i64,
+    status: String,
+    entry_id: Option<i64>,
+) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
+    let token = token.ok_or("Not logged in")?;
 
     if status == "Not in List" {
-        // We need the list entry id — skip for now, handle on frontend
+        // Removing needs the list entry's own id; no entry means nothing to remove.
+        let Some(id) = entry_id.filter(|id| *id > 0) else {
+            return Ok(serde_json::json!({ "deleted": false }));
+        };
+        let res = anilist_query(&state.http, DELETE_ENTRY_MUTATION, serde_json::json!({ "id": id }), Some(&token)).await?;
+        if res["data"]["DeleteMediaListEntry"]["deleted"].as_bool() != Some(true) {
+            return Err("AniList did not remove the entry".to_string());
+        }
         return Ok(serde_json::json!({ "deleted": true }));
     }
 
-    let token = token.ok_or("Not logged in")?;
     anilist_query(
         &state.http,
         UPDATE_STATUS_MUTATION,
@@ -637,7 +739,6 @@ fn play_episode(
     };
 
     let quality = cfg.quality.clone().unwrap_or_else(|| "best".to_string());
-    let token = cfg.anilist_token.clone();
     let player_active = state.player_active.clone();
     {
         let mut active = player_active.lock().unwrap();
@@ -652,7 +753,6 @@ fn play_episode(
     let fullscreen = cfg.fullscreen.unwrap_or(true);
 
     std::thread::spawn(move || {
-        let safe_title = title.replace('"', "");
         let dub_flag = if cfg.dub.unwrap_or(false) { " --dub" } else { "" };
         let data_dir = anigui_data_dir();
         let stats_file = data_dir.as_ref().map(|d| d.join("last_watched.json"));
@@ -671,9 +771,11 @@ fn play_episode(
         let mut current_ep = ep_num;
         let mut is_first_launch = true;
         loop {
+            // The title and quality reach bash as variables, never as script
+            // text, so quotes, `$` or backticks in a title can't break out.
             let cmd = format!(
-                r#"ani-cli "{}" -S 1 -e {} -q {}{} --exit-after-play"#,
-                safe_title, current_ep, quality, dub_flag
+                r#"ani-cli "$ANIGUI_TITLE" -S 1 -e {} -q "$ANIGUI_QUALITY"{} --exit-after-play"#,
+                current_ep, dub_flag
             );
             let start = std::time::Instant::now();
 
@@ -685,6 +787,8 @@ fn play_episode(
             let mut command = spawn_bash_command(&bash_path);
             command
                 .args(["-lc", &shell_command(&cmd)])
+                .env("ANIGUI_TITLE", &title)
+                .env("ANIGUI_QUALITY", &quality)
                 .env("ANIGUI_EP", current_ep.to_string())
                 .env("ANIGUI_EP_TOTAL", total_eps.to_string())
                 .env("ANIGUI_AUTOPLAY", if autoplay_next { "1" } else { "0" })
@@ -695,11 +799,16 @@ fn play_episode(
             if let Some(nav) = &nav_file {
                 command.env("ANIGUI_NAV_FILE", nav);
             }
+            // Picks up an episode left part-way through (see `save_in_progress`).
+            if let Some(t) = anime_id.and_then(|id| resume_position(&read_in_progress(), id, current_ep)) {
+                command.env("ANIGUI_RESUME", format!("{:.1}", t));
+            }
             let _ = command.status();
 
             let elapsed = start.elapsed().as_secs_f64();
             let mut percent = 0.0;
             let mut time_pos = 0.0;
+            let mut duration = 0.0;
             let mut played = false;
 
             if let Some(content) = stats_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()) {
@@ -710,6 +819,9 @@ fn play_episode(
                     }
                     if let Some(t) = json["time"].as_f64() {
                         time_pos = t;
+                    }
+                    if let Some(d) = json["duration"].as_f64() {
+                        duration = d;
                     }
                 }
             }
@@ -735,13 +847,15 @@ fn play_episode(
 
             // A relaunched episode that never got as far as a tracker tick
             // (ani-cli failed, or it was closed within seconds) wasn't watched.
-            if token.is_some() && (is_first_launch || played) {
+            // Emitted logged-out too: local history and in-progress don't need AniList.
+            if is_first_launch || played {
                 let _ = app.emit("playback_finished", serde_json::json!({
                     "animeId": anime_id,
                     "epNum": current_ep,
                     "elapsed": elapsed,
                     "percent": percent,
                     "timePos": time_pos,
+                    "duration": duration,
                     "advanced": advanced
                 }));
             }
@@ -760,6 +874,19 @@ fn play_episode(
     serde_json::json!({ "success": true })
 }
 
+/// ani-cli downloads with yt-dlp, or ffmpeg when yt-dlp is missing — neither
+/// ships with AniGUI's runtime, so check before queueing a download that can
+/// only fail.
+fn downloader_available(bash_path: &str) -> bool {
+    spawn_bash_command(bash_path)
+        .args(["-lc", &shell_command("command -v yt-dlp >/dev/null || command -v ffmpeg >/dev/null")])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+const NO_DOWNLOADER: &str = "Downloading needs yt-dlp or ffmpeg, and neither is installed. Install one (e.g. `winget install yt-dlp`) and try again.";
+
 #[tauri::command]
 fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_num: i64) -> Value {
     let cfg = state.config.lock().unwrap().clone();
@@ -770,51 +897,98 @@ fn start_download(state: State<AppState>, app: AppHandle, title: String, ep_num:
     };
 
     let quality = cfg.quality.clone().unwrap_or_else(|| "best".to_string());
-    let download_dir = cfg.download_dir.clone().unwrap_or_else(|| {
-        let mut d = dirs_next::download_dir().unwrap_or_default();
-        d.push("AniGUI");
-        let _ = std::fs::create_dir_all(&d);
-        d.to_string_lossy().to_string()
-    });
+    let download_dir = effective_download_dir(&cfg);
+    if let Err(e) = std::fs::create_dir_all(&download_dir) {
+        return serde_json::json!({ "error": format!("Can't create the download folder: {e}") });
+    }
+    let download_pid = state.download_pid.clone();
 
     std::thread::spawn(move || {
-        let safe_title = title.replace('"', "");
+        // Checked here, not before spawning: it runs bash, and a sync command
+        // would block the UI thread meanwhile. `fatal` tells the queue not to retry.
+        if !downloader_available(&bash_path) {
+            let _ = app.emit("download_finished", serde_json::json!({ "success": false, "fatal": true, "error": NO_DOWNLOADER }));
+            return;
+        }
         let dub_flag = if cfg.dub.unwrap_or(false) { " --dub" } else { "" };
+        // Paths and titles go in as variables (see play_episode).
         let cmd = format!(
-            r#"cd "{}" && ani-cli "{}" -S 1 -e {} -q {}{} -d"#,
-            download_dir, safe_title, ep_num, quality, dub_flag
+            r#"cd "$ANIGUI_DL_DIR" && ani-cli "$ANIGUI_TITLE" -S 1 -e {} -q "$ANIGUI_QUALITY"{} -d"#,
+            ep_num, dub_flag
         );
 
         let mut child = match spawn_bash_command(&bash_path)
             .args(["-lc", &shell_command(&cmd)])
+            .env("ANIGUI_DL_DIR", &download_dir)
+            .env("ANIGUI_TITLE", &title)
+            .env("ANIGUI_QUALITY", &quality)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
         {
             Ok(c) => c,
             Err(e) => {
-                let _ = app.emit("download_log", serde_json::json!({ "line": format!("Error: {}", e) }));
+                let _ = app.emit("download_chunk", serde_json::json!({ "chunk": format!("Error: {}\n", e) }));
+                let _ = app.emit("download_finished", serde_json::json!({ "success": false }));
                 return;
             }
         };
+        *download_pid.lock().unwrap() = Some(child.id());
 
-        if let Some(mut stdout) = child.stdout.take() {
-            use std::io::Read;
-            let mut buf = [0u8; 1024];
-            while let Ok(n) = stdout.read(&mut buf) {
-                if n == 0 { break; }
-                let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                let _ = app.emit("download_chunk", serde_json::json!({ "chunk": chunk }));
-            }
-        }
+        // Both pipes must be drained: ffmpeg writes its progress to stderr
+        // non-stop, and an unread pipe fills up and freezes the download.
+        let pump = |pipe: Option<Box<dyn std::io::Read + Send>>, app: AppHandle| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let Some(mut pipe) = pipe else { return };
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = pipe.read(&mut buf) {
+                    if n == 0 { break; }
+                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let _ = app.emit("download_chunk", serde_json::json!({ "chunk": chunk }));
+                }
+            })
+        };
+        let out = pump(child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), app.clone());
+        let err = pump(child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), app.clone());
 
         let status = child.wait();
+        let _ = out.join();
+        let _ = err.join();
+        let cancelled = download_pid.lock().unwrap().take().is_none();
         let _ = app.emit("download_finished", serde_json::json!({
-            "success": status.map(|s| s.success()).unwrap_or(false)
+            "success": !cancelled && status.map(|s| s.success()).unwrap_or(false),
+            "cancelled": cancelled
         }));
     });
 
     serde_json::json!({ "success": true })
+}
+
+/// Stops the running download, including the ani-cli/ffmpeg/yt-dlp processes
+/// bash started.
+#[tauri::command]
+fn cancel_download(state: State<AppState>) -> bool {
+    // Taking the pid marks the download as cancelled for start_download's thread.
+    let Some(pid) = state.download_pid.lock().unwrap().take() else { return false };
+    kill_process_tree(pid);
+    true
+}
+
+fn kill_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x0800_0000)
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("pkill").args(["-TERM", "-P", &pid.to_string()]).status();
+        let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    }
 }
 
 #[tauri::command]
@@ -865,8 +1039,7 @@ async fn get_all_time_popular(state: State<'_, AppState>, page: Option<i64>) -> 
 async fn get_planning(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
-    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
-    let user_id = viewer["data"]["Viewer"]["id"].as_i64().ok_or("Could not get user ID")?;
+    let user_id = viewer_id(&state, &token).await?;
     anilist_query(
         &state.http,
         &planning_query(),
@@ -881,8 +1054,7 @@ async fn get_planning(state: State<'_, AppState>) -> Result<Value, String> {
 async fn get_all_lists(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
-    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
-    let user_id = viewer["data"]["Viewer"]["id"].as_i64().ok_or("Could not get user ID")?;
+    let user_id = viewer_id(&state, &token).await?;
     anilist_query(
         &state.http,
         &all_lists_query(),
@@ -956,16 +1128,33 @@ async fn get_airing_schedule(state: State<'_, AppState>, days_ahead: Option<i64>
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
     let days = days_ahead.unwrap_or(7);
-    // Slight look-back (1 h) so "airing now" shows up; look-ahead covers full week.
-    let start = now - 3_600;
+    // A day of look-back so today's earlier episodes still show (as "Aired");
+    // the calendar drops anything before local midnight itself.
+    let start = now - 86_400;
     let end   = now + days * 86_400;
-    anilist_query(
-        &state.http,
-        AIRING_SCHEDULE_QUERY,
-        serde_json::json!({ "airingAtGreater": start, "airingAtLesser": end, "page": 1 }),
-        token.as_deref(),
-    ).await
+
+    // A week is well over one page (50) of episodes: keep paging, or the
+    // calendar runs dry halfway through the week.
+    let mut schedules = Vec::new();
+    for page in 1..=AIRING_MAX_PAGES {
+        let res = anilist_query(
+            &state.http,
+            AIRING_SCHEDULE_QUERY,
+            serde_json::json!({ "airingAtGreater": start, "airingAtLesser": end, "page": page }),
+            token.as_deref(),
+        ).await?;
+        let page_data = &res["data"]["Page"];
+        if let Some(items) = page_data["airingSchedules"].as_array() {
+            schedules.extend(items.iter().cloned());
+        }
+        if page_data["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+            break;
+        }
+    }
+    Ok(serde_json::json!({ "data": { "Page": { "airingSchedules": schedules } } }))
 }
+
+const AIRING_MAX_PAGES: i64 = 10;
 
 // ─── User Stats ────────────────────────────────────────────────────────────────
 
@@ -973,10 +1162,7 @@ async fn get_airing_schedule(state: State<'_, AppState>, days_ahead: Option<i64>
 async fn get_user_stats(state: State<'_, AppState>) -> Result<Value, String> {
     let token = state.config.lock().unwrap().anilist_token.clone();
     let token = token.ok_or("Not logged in")?;
-    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(&token)).await?;
-    let user_id = viewer["data"]["Viewer"]["id"]
-        .as_i64()
-        .ok_or("Could not get user ID")?;
+    let user_id = viewer_id(&state, &token).await?;
     anilist_query(
         &state.http,
         USER_STATS_QUERY,
@@ -1023,6 +1209,59 @@ fn get_history() -> Value {
         .unwrap_or_else(|| serde_json::json!([]))
 }
 
+const IN_PROGRESS_LIMIT: usize = 50;
+
+fn read_in_progress() -> Vec<Value> {
+    std::fs::read_to_string(get_in_progress_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_in_progress(list: &[Value]) -> bool {
+    let path = get_in_progress_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    serde_json::to_string_pretty(list)
+        .map(|data| std::fs::write(&path, data).is_ok())
+        .unwrap_or(false)
+}
+
+/// Replaces `entry`'s anime in `list` and moves it to the front.
+fn upsert_in_progress(mut list: Vec<Value>, entry: Value) -> Vec<Value> {
+    let id = entry["animeId"].as_i64();
+    list.retain(|e| e["animeId"].as_i64() != id);
+    list.insert(0, entry);
+    list.truncate(IN_PROGRESS_LIMIT);
+    list
+}
+
+/// Where to resume `anime_id` episode `ep`, if it was left part-way through.
+fn resume_position(list: &[Value], anime_id: i64, ep: i64) -> Option<f64> {
+    list.iter()
+        .find(|e| e["animeId"].as_i64() == Some(anime_id) && e["ep"].as_i64() == Some(ep))
+        .and_then(|e| e["timePos"].as_f64())
+        .filter(|t| *t > 10.0)
+}
+
+#[tauri::command]
+fn get_in_progress() -> Value {
+    Value::Array(read_in_progress())
+}
+
+#[tauri::command]
+fn save_in_progress(entry: Value) -> bool {
+    write_in_progress(&upsert_in_progress(read_in_progress(), entry))
+}
+
+#[tauri::command]
+fn remove_in_progress(anime_id: i64) -> bool {
+    let mut list = read_in_progress();
+    list.retain(|e| e["animeId"].as_i64() != Some(anime_id));
+    write_in_progress(&list)
+}
+
 #[tauri::command]
 fn clear_history() -> bool {
     let path = get_history_path();
@@ -1032,6 +1271,15 @@ fn clear_history() -> bool {
 
 #[tauri::command]
 fn export_history_csv(path: String, csv: String) -> Result<Value, String> {
+    // The path comes from a save dialog; refusing anything but .csv keeps this
+    // from being a general "write any file" command.
+    let is_csv = std::path::Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+    if !is_csv {
+        return Err("History can only be exported to a .csv file".to_string());
+    }
     std::fs::write(&path, csv).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "success": true }))
 }
@@ -1086,13 +1334,8 @@ async fn advanced_search(
 #[tauri::command]
 fn get_downloads(state: State<AppState>) -> Value {
     let cfg = state.config.lock().unwrap().clone();
-    let download_dir = cfg.download_dir.clone().unwrap_or_else(|| {
-        let mut d = dirs_next::download_dir().unwrap_or_default();
-        d.push("AniGUI");
-        d.to_string_lossy().to_string()
-    });
-
-    let path = std::path::Path::new(&download_dir);
+    let download_dir = effective_download_dir(&cfg);
+    let path = download_dir.as_path();
     if !path.exists() {
         return serde_json::json!([]);
     }
@@ -1119,8 +1362,27 @@ fn get_downloads(state: State<AppState>) -> Value {
     serde_json::json!(files)
 }
 
+/// `path` if it's a video directly inside the download folder. The Offline
+/// screen only ever passes those; anything else is refused rather than letting
+/// the page open or delete arbitrary files.
+fn downloaded_video(state: &AppState, path: &str) -> Result<std::path::PathBuf, String> {
+    let dir = effective_download_dir(&state.config.lock().unwrap());
+    let dir = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    let file = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let is_video = matches!(
+        file.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("mp4" | "mkv")
+    );
+    if file.parent() == Some(dir.as_path()) && is_video {
+        Ok(file)
+    } else {
+        Err("Not a downloaded episode".to_string())
+    }
+}
+
 #[tauri::command]
-fn play_local_file(path: String) -> Result<Value, String> {
+fn play_local_file(state: State<AppState>, path: String) -> Result<Value, String> {
+    let path = downloaded_video(&state, &path)?;
     match open::that(&path) {
         Ok(_) => Ok(serde_json::json!({ "success": true })),
         Err(e) => Err(e.to_string()),
@@ -1128,7 +1390,8 @@ fn play_local_file(path: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn delete_local_file(path: String) -> Result<Value, String> {
+fn delete_local_file(state: State<AppState>, path: String) -> Result<Value, String> {
+    let path = downloaded_video(&state, &path)?;
     match std::fs::remove_file(&path) {
         Ok(_) => Ok(serde_json::json!({ "success": true })),
         Err(e) => Err(e.to_string()),
@@ -1312,10 +1575,54 @@ async fn check_anicli_version(state: State<'_, AppState>) -> Result<Value, Strin
 mod backend_helper_tests {
     use super::{
         advanced_search_query, all_time_popular_query, anicli_update_available,
-        navigation_target, parse_nav_action, popular_season_query, search_query,
-        trending_query, upcoming_season_query, usable_anilist_token, NavAction,
+        navigation_target, parse_nav_action, popular_season_query, resume_position,
+        is_invalid_token_error, search_query, trending_query, upsert_in_progress, upcoming_season_query, usable_anilist_token, NavAction,
         AIRING_SCHEDULE_QUERY, MEDIA_FIELDS,
     };
+
+    #[test]
+    fn recognizes_anilist_invalid_token_errors() {
+        assert!(is_invalid_token_error("AniList API: Invalid token"));
+        assert!(is_invalid_token_error("invalid token"));
+        assert!(!is_invalid_token_error("AniList API: rate limited (429)"));
+    }
+
+    #[test]
+    fn media_fields_fragment_requests_format() {
+        // Cards show TV/Movie/OVA and Browse filters by it.
+        assert!(MEDIA_FIELDS.contains("format"));
+    }
+
+    #[test]
+    fn airing_schedule_query_reports_more_pages() {
+        // get_airing_schedule pages until hasNextPage is false.
+        assert!(AIRING_SCHEDULE_QUERY.contains("hasNextPage"));
+    }
+
+    #[test]
+    fn in_progress_keeps_one_entry_per_anime_newest_first() {
+        let list = vec![
+            serde_json::json!({ "animeId": 1, "ep": 2, "timePos": 300.0 }),
+            serde_json::json!({ "animeId": 2, "ep": 5, "timePos": 50.0 }),
+        ];
+        let list = upsert_in_progress(list, serde_json::json!({ "animeId": 2, "ep": 6, "timePos": 0.0 }));
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["animeId"], 2);
+        assert_eq!(list[0]["ep"], 6);
+        assert_eq!(list[1]["animeId"], 1);
+    }
+
+    #[test]
+    fn resumes_only_the_episode_left_part_way() {
+        let list = vec![
+            serde_json::json!({ "animeId": 1, "ep": 2, "timePos": 300.0 }),
+            serde_json::json!({ "animeId": 2, "ep": 6, "timePos": 0.0 }),
+        ];
+        assert_eq!(resume_position(&list, 1, 2), Some(300.0));
+        assert_eq!(resume_position(&list, 1, 3), None);
+        assert_eq!(resume_position(&list, 2, 6), None);
+        assert_eq!(resume_position(&list, 3, 1), None);
+    }
 
     #[test]
     fn parses_player_navigation_requests() {
@@ -1443,7 +1750,10 @@ async fn update_anicli(state: State<'_, AppState>, app: AppHandle) -> Result<Val
 pub fn run() {
     bootstrap::install_mpv_script();
     let config_path = get_config_path();
-    let config = load_config_from_disk(&config_path);
+    let mut config = load_config_from_disk(&config_path);
+    if clear_autosaved_bash_path(&mut config) {
+        save_config_to_disk(&config_path, &config);
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1454,8 +1764,10 @@ pub fn run() {
             config: Mutex::new(config),
             config_path,
             player_active: Arc::new(Mutex::new(false)),
+            download_pid: Arc::new(Mutex::new(None)),
+            viewer: Mutex::new(None),
             http: reqwest::Client::builder()
-                .user_agent("AniGUI/1.4.0")
+                .user_agent(concat!("AniGUI/", env!("CARGO_PKG_VERSION")))
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
@@ -1493,10 +1805,14 @@ pub fn run() {
             update_status,
             play_episode,
             start_download,
+            cancel_download,
             get_airing_schedule,
             get_user_stats,
             append_history,
             get_history,
+            get_in_progress,
+            save_in_progress,
+            remove_in_progress,
             clear_history,
             export_history_csv,
             get_media_genres,

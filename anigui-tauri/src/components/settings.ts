@@ -10,8 +10,16 @@ import type { RuntimeStatus } from '../types';
 
 export function openSettings() {
   (document.getElementById("s-token") as HTMLInputElement).value = state.config.anilist_token || "";
-  (document.getElementById("s-bash") as HTMLInputElement).value = state.config.bash_path || "";
-  (document.getElementById("s-dldir") as HTMLInputElement).value = state.config.download_dir || "";
+  // Empty = automatic. The automatic value is only a hint (placeholder), so
+  // saving the form never turns it into a manual override.
+  const bashInput = document.getElementById("s-bash") as HTMLInputElement;
+  bashInput.value = state.config.bash_path || "";
+  bashInput.placeholder = state.config.detected_bash_path
+    ? `Automatic: ${state.config.detected_bash_path}`
+    : "Leave blank to use AniGUI's bundled runtime";
+  const dlInput = document.getElementById("s-dldir") as HTMLInputElement;
+  dlInput.value = state.config.download_dir || "";
+  dlInput.placeholder = `Automatic: ${state.config.default_download_dir || "Downloads/AniGUI"}`;
   (document.getElementById("s-theme") as HTMLSelectElement).value = state.config.theme || "coral";
   (document.getElementById("s-quality") as HTMLSelectElement).value = state.config.quality || "best";
   (document.getElementById("s-autosync") as HTMLInputElement).checked = state.config.auto_sync || false;
@@ -71,6 +79,7 @@ export async function saveSettings() {
   document.body.setAttribute("data-theme", state.config.theme);
 
   state.viewerName = null;
+  state.viewerAvatar = null;
   updateLoginStatus();
   await fetchViewerName();
   document.getElementById("modal-settings")!.classList.remove("open");
@@ -91,13 +100,22 @@ export function updateLoginStatus() {
       topbarEl?.classList.add("logged-in");
       statusEl.title = state.viewerName ?? "Logged in";
       label.textContent = state.viewerName ?? "Logged in";
+      topbarEl?.setAttribute("title", "Open your profile");
     } else {
       statusEl.classList.remove("logged-in");
       topbarEl?.classList.remove("logged-in");
       state.viewerName = null;
+      state.viewerAvatar = null;
       statusEl.title = "Not logged in";
       label.textContent = "Not logged in";
+      topbarEl?.setAttribute("title", "Log in from your profile");
     }
+  }
+  // The rail's avatar slot only shows once there's a real avatar to put in it.
+  const avatar = document.getElementById("rail-avatar");
+  if (avatar) {
+    avatar.hidden = !state.viewerAvatar;
+    avatar.style.backgroundImage = state.viewerAvatar ? `url("${encodeURI(state.viewerAvatar)}")` : "";
   }
 }
 
@@ -106,6 +124,7 @@ export async function fetchViewerName() {
   try {
     const data = await invoke<any>("get_viewer_info");
     state.viewerName = data?.data?.Viewer?.name ?? null;
+    state.viewerAvatar = data?.data?.Viewer?.avatar?.medium ?? null;
     updateLoginStatus();
   } catch { /* not logged in or network error */ }
 }

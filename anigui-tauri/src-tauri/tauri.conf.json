@@ -26,7 +26,26 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src": "'self' https://fonts.gstatic.com",
+        "img-src": "'self' data: https:",
+        "connect-src": "'self' ipc: http://ipc.localhost https://api.aniskip.com",
+        "object-src": "'none'",
+        "base-uri": "'self'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src": "'self' https://fonts.gstatic.com",
+        "img-src": "'self' data: https:",
+        "connect-src": "'self' ipc: http://ipc.localhost https://api.aniskip.com ws://localhost:1421 ws://localhost:1420",
+        "object-src": "'none'",
+        "base-uri": "'self'"
+      }
     }
   },
   "bundle": {

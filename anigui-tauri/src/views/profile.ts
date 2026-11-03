@@ -5,7 +5,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { state } from '../state';
 import { toast } from '../components/toast';
-import { setActiveNav, wireDropdown } from '../utils';
+import { confirmAction, setActiveNav, wireDropdown, esc } from '../utils';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 type ProfileTab = 'stats' | 'history' | 'manage';
 let _activeTab: ProfileTab = 'stats';
@@ -15,6 +16,7 @@ let _activeTab: ProfileTab = 'stats';
 export async function loadProfile(tab?: ProfileTab) {
   _activeTab = tab ?? (state.config.anilist_token ? 'stats' : 'history');
   setActiveNav('login-status');
+  state.selectedMedia = null;
 
   const main = document.getElementById('main-panel')!;
   main.innerHTML = renderShell();
@@ -126,11 +128,16 @@ async function hydrateHeader() {
     const viewer = data?.data?.Viewer;
     if (!viewer) return;
     if (avatarWrap) avatarWrap.innerHTML = viewer.avatar?.medium
-      ? `<img class="profile-avatar" src="${viewer.avatar.medium}" alt="${viewer.name}" onerror="this.style.opacity=0.3"/>`
+      ? `<img class="profile-avatar" src="${esc(viewer.avatar.medium)}" alt="${esc(viewer.name)}"/>`
       : `<div class="profile-avatar profile-avatar--anon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>`;
     if (meta) meta.innerHTML = `
       <div class="profile-name">${esc(viewer.name)}</div>
-      <div class="profile-sub">AniList · <a class="profile-anilist-link" href="https://anilist.co/user/${esc(viewer.name)}" target="_blank">${esc(viewer.name)} ↗</a></div>`;
+      <div class="profile-sub">AniList · <a class="profile-anilist-link" href="https://anilist.co/user/${encodeURIComponent(viewer.name)}">${esc(viewer.name)} ↗</a></div>`;
+    // The webview doesn't open new windows: hand the link to the system browser.
+    meta?.querySelector<HTMLAnchorElement>('.profile-anilist-link')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      openUrl((e.currentTarget as HTMLAnchorElement).href).catch(err => toast(`Couldn't open the link: ${err}`, 'error'));
+    });
   } catch { /* silently fail */ }
 }
 
@@ -288,7 +295,7 @@ async function renderHistory() {
         <div class="history-stat"><div class="history-stat-value">${entries.length}</div><div class="history-stat-label">Episodes</div></div>
         <div class="history-stat"><div class="history-stat-value">${hours}<span class="stat-unit">h</span> ${mins}<span class="stat-unit">m</span></div><div class="history-stat-label">Approx. watch time</div></div>
         <div class="history-stat"><div class="history-stat-value">${byShow.size}</div><div class="history-stat-label">Distinct shows</div></div>
-        ${topShow ? `<div class="history-stat"><div class="history-stat-value" title="${esc(topShow.title)}">${topShow.count}×</div><div class="history-stat-label">Most rewatched — ${esc(topShow.title)}</div></div>` : ''}
+        ${topShow ? `<div class="history-stat"><div class="history-stat-value" title="${esc(topShow.title)}">${topShow.count}×</div><div class="history-stat-label">Most watched — ${esc(topShow.title)}</div></div>` : ''}
       </div>
       <div class="history-genre-section" id="history-genres"></div>
       <div class="history-top-bar">
@@ -305,10 +312,10 @@ async function renderHistory() {
         const t = new Date(entry.watchedAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         html += `
           <div class="history-entry" data-title="${esc(entry.animeTitle)}" data-id="${entry.animeId}">
-            <img class="history-cover" src="${entry.cover}" alt="" loading="lazy" onerror="this.style.opacity=0.3"/>
+            <img class="history-cover" src="${esc(entry.cover)}" alt="" loading="lazy"/>
             <div class="history-info">
               <div class="history-title">${esc(entry.animeTitle)}</div>
-              <div class="history-meta">Episode ${entry.epNum} · ${t}</div>
+              <div class="history-meta">Episode ${esc(entry.epNum)} · ${t}</div>
             </div>
             <svg class="history-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           </div>`;
@@ -319,6 +326,7 @@ async function renderHistory() {
     content.innerHTML = html;
 
     document.getElementById('clear-history-btn')?.addEventListener('click', async () => {
+      if (!await confirmAction(`Clear all ${entries.length} entries from your watch history? This can't be undone.`, 'Clear')) return;
       await invoke('clear_history');
       toast('History cleared.', 'info');
       await renderHistory();
@@ -499,7 +507,7 @@ function drawManage() {
           return `
           <label class="manage-row" data-media-id="${e.media.id}">
             <input type="checkbox" class="manage-row-check" data-media-id="${e.media.id}" ${_manageSelected.has(e.media.id) ? 'checked' : ''} />
-            <img class="manage-row-cover" src="${e.media.coverImage.medium}" alt="" loading="lazy" onerror="this.style.opacity=0.3"/>
+            <img class="manage-row-cover" src="${esc(e.media.coverImage.medium)}" alt="" loading="lazy"/>
             <div class="manage-row-info">
               <div class="manage-row-title">${esc(title)}</div>
               <div class="manage-row-meta">EP ${e.progress}${eps ? ` / ${eps}` : ''}${!eps ? ' · airing' : ''}</div>
@@ -585,6 +593,8 @@ async function runBulkMarkWatched() {
     toast('None of the selected shows have a known episode count yet.', 'info');
     return;
   }
+  const skipNote = skipped ? ` (${skipped} with an unknown episode count will be skipped)` : '';
+  if (!await confirmAction(`Mark ${withEpisodes.length} show${withEpisodes.length !== 1 ? 's' : ''} as completed on AniList${skipNote}?`, 'Mark watched')) return;
   const ops = withEpisodes.map(e => ({ mediaId: e.media.id, progress: e.media.episodes, status: 'COMPLETED' }));
   await runBulkUpdate(ops, 'Marked watched', skipped);
 }
@@ -633,6 +643,3 @@ function groupByDate(entries: any[]): Map<string, any[]> {
   return map;
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}

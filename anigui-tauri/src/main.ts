@@ -10,7 +10,9 @@ import { state } from "./state";
 // Views
 import { loadBrowse } from "./views/browse";
 import { loadDownloads } from "./views/downloads";
-import { loadHome, loadSearchResults, jumpToWatching } from "./views/home";
+import { loadHome, loadSearchResults, loadWatching, refreshHomeIfShown } from "./views/home";
+import { isEpisodeFinished, recordProgress } from "./watch-progress";
+import { wireImageFallback } from "./utils";
 import { applySyncedProgress, resetPlayButtons, setPlayingEpisode } from "./views/detail";
 import { loadCalendar } from "./views/calendar";
 import { loadProfile } from "./views/profile";
@@ -27,7 +29,10 @@ import { wireSettings, updateLoginStatus, fetchViewerName } from "./components/s
 import { openRuntimeSetup, wireRuntimeSetup, handleRuntimeProgress } from "./components/runtime-setup";
 import { handleDownloadChunk, handleDownloadFinished } from "./components/download-queue";
 
+const HISTORY_MIN_SECONDS = 60;
+
 async function init() {
+  wireImageFallback();
   // ── Config ──────────────────────────────────────────────────────────────────
   state.config = await invoke<Config>("get_config");
   document.body.setAttribute("data-theme", state.config.theme);
@@ -53,9 +58,9 @@ async function init() {
   loadHome();
 
   // ── Rail navigation ──────────────────────────────────────────────────────────
-  document.getElementById("btn-home")!.addEventListener("click", loadHome);
+  document.getElementById("btn-home")!.addEventListener("click", () => loadHome());
   document.getElementById("btn-browse")!.addEventListener("click", loadBrowse);
-  document.getElementById("btn-watching")!.addEventListener("click", jumpToWatching);
+  document.getElementById("btn-watching")!.addEventListener("click", () => loadWatching());
   document.getElementById("btn-downloads")!.addEventListener("click", loadDownloads);
   document.getElementById("btn-calendar")!.addEventListener("click", loadCalendar);
   document.getElementById("btn-shortcuts")!.addEventListener("click", toggleOverlay);
@@ -63,8 +68,16 @@ async function init() {
   // ── Profile (login-status) ────────────────────────────────────────────────────
   // Logged in  → open Profile on Stats tab
   // Not logged in → open Profile on History tab (history works without login)
-  document.getElementById("login-status")!.addEventListener("click", () => {
-    loadProfile(state.config.anilist_token ? "stats" : "history");
+  const openProfile = () => loadProfile(state.config.anilist_token ? "stats" : "history");
+  document.getElementById("login-status")!.addEventListener("click", openProfile);
+  document.getElementById("rail-avatar")!.addEventListener("click", openProfile);
+  // The name pill in the top bar reads like a button, so it acts like one.
+  const topbarStatus = document.getElementById("topbar-status")!;
+  topbarStatus.setAttribute("role", "button");
+  topbarStatus.tabIndex = 0;
+  topbarStatus.addEventListener("click", openProfile);
+  topbarStatus.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") openProfile();
   });
 
   // ── Search ───────────────────────────────────────────────────────────────────
@@ -106,17 +119,22 @@ async function init() {
   });
 
   await listen("playback_finished", async (event: any) => {
-    const { animeId, epNum, percent, timePos, advanced } = event.payload;
+    const { animeId, epNum, percent, timePos, duration, advanced } = event.payload;
+    if (animeId == null) return;
 
     // animeId/epNum come from the payload, not state.activePlayingAnimeId/Ep:
     // player_closed (emitted first) resets those, and the player's next-episode
     // button moves the episode on before this handler gets to run.
     const playedMedia =
+      (state.playingMedia?.id === animeId ? state.playingMedia : undefined) ??
       state.sidebarItems.find(m => m.id === animeId) ??
       (state.selectedMedia?.id === animeId ? state.selectedMedia : undefined);
 
+    const isFinished = await isEpisodeFinished(playedMedia, epNum, percent, timePos, advanced);
+
     // ── Local history (works without AniList login) ────────────────────────────
-    if (playedMedia) {
+    // Opening an episode for a few seconds isn't watching it.
+    if (playedMedia && (isFinished || timePos >= HISTORY_MIN_SECONDS)) {
       const nowSec = Math.floor(Date.now() / 1000);
       try {
         await invoke("append_history", {
@@ -131,47 +149,26 @@ async function init() {
       } catch { /* non-critical, ignore */ }
     }
 
-    if (!state.config.anilist_token) return;
-
-    if (animeId == null) return;
-
-    const capturedAnimeId = animeId;
-    const capturedEp = epNum;
-
-    // Watched = the user asked for the next episode (`advanced`), or got near the
-    // outro. Time spent in the player doesn't matter: opening an episode and
-    // jumping to the end counts, opening it and closing it early doesn't.
-    let isFinished = advanced || percent > 0.85;
-
-    if (!advanced && playedMedia?.idMal && timePos > 0) {
-      try {
-        const res = await fetch(`https://api.aniskip.com/v2/skip-times/${playedMedia.idMal}/${epNum}?types=ed&episodeLength=0`);
-        if (res.ok) {
-          const data = await res.json();
-          const ed = data.results?.find((r: any) => r.skipType === "ed");
-          if (ed?.interval?.startTime) {
-            isFinished = timePos >= (ed.interval.startTime - 10);
-          }
-        }
-      } catch (err) {
-        console.error("AniSkip fetch failed", err);
-      }
+    // ── Local continue-watching (also works without login) ─────────────────────
+    if (playedMedia) {
+      await recordProgress(playedMedia, epNum, timePos, duration ?? 0, isFinished);
+      refreshHomeIfShown();
     }
 
-    if (isFinished) {
-      if (state.config.auto_sync) {
-        try {
-          await invoke("sync_progress", { mediaId: capturedAnimeId, epNum: capturedEp });
-          applySyncedProgress(capturedAnimeId, capturedEp);
-          toast(`Auto-synced Episode ${capturedEp}`, "success");
-        } catch (err: any) {
-          toast(`Failed to auto-sync: ${err}`, "error");
-        }
-      } else if (state.config.confirm_before_sync) {
-        state.pendingSyncEp = epNum;
-        state.pendingSyncAnimeId = capturedAnimeId;
-        showSyncBar(epNum);
+    if (!state.config.anilist_token || !isFinished) return;
+
+    if (state.config.auto_sync) {
+      try {
+        await invoke("sync_progress", { mediaId: animeId, epNum });
+        applySyncedProgress(animeId, epNum);
+        toast(`Auto-synced Episode ${epNum}`, "success");
+      } catch (err: any) {
+        toast(`Failed to auto-sync: ${err}`, "error");
       }
+    } else if (state.config.confirm_before_sync) {
+      state.pendingSyncEp = epNum;
+      state.pendingSyncAnimeId = animeId;
+      showSyncBar(epNum);
     }
   });
 
@@ -180,7 +177,7 @@ async function init() {
   });
 
   await listen("download_finished", (event: any) => {
-    handleDownloadFinished(!!event.payload.success);
+    handleDownloadFinished(event.payload);
   });
 }
 
@@ -222,25 +219,10 @@ if (import.meta.env.DEV) {
     state.activePlayingAnimeId = state.selectedMedia.id;
     state.activePlayingEp = ep;
 
-    let isFinished = advanced || overridePercent > 0.85;
     const playedMedia = state.sidebarItems.find(m => m.id === state.selectedMedia!.id) ?? state.selectedMedia;
-    if (!advanced && playedMedia?.idMal && overrideTimePos > 0) {
-      try {
-        const res = await fetch(`https://api.aniskip.com/v2/skip-times/${playedMedia.idMal}/${ep}?types=ed&episodeLength=0`);
-        if (res.ok) {
-          const data = await res.json();
-          const ed = data.results?.find((r: any) => r.skipType === "ed");
-          if (ed?.interval?.startTime) {
-            isFinished = overrideTimePos >= (ed.interval.startTime - 10);
-            console.info(`[testSync] AniSkip ED starts at ${ed.interval.startTime}s → isFinished = ${isFinished}`);
-          } else {
-            console.info("[testSync] AniSkip returned no ED data, falling back to percent check.");
-          }
-        }
-      } catch (err) {
-        console.warn("[testSync] AniSkip fetch failed:", err);
-      }
-    }
+    const isFinished = await isEpisodeFinished(playedMedia, ep, overridePercent, overrideTimePos, advanced);
+    console.info(`[testSync] isFinished = ${isFinished}`);
+    await recordProgress(playedMedia, ep, overrideTimePos, overrideTimePos / Math.max(overridePercent, 0.01), isFinished);
 
     if (isFinished) {
       if (state.config.auto_sync) {

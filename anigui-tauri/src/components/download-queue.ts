@@ -9,7 +9,7 @@ import './download-queue.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media, DownloadQueueItem } from '../types';
-import { el } from '../utils';
+import { el, esc } from '../utils';
 import { toast } from './toast';
 
 const MAX_RETRIES = 2;
@@ -19,9 +19,6 @@ function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 function stripAnsi(log: string): string[] {
   const clean = log.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
@@ -78,7 +75,7 @@ async function processQueue() {
   }
 }
 
-function finishActiveItem(success: boolean, errorNote?: string) {
+function finishActiveItem(success: boolean, errorNote?: string, opts: { fatal?: boolean; cancelled?: boolean } = {}) {
   const item = activeItem();
   processing = false;
   if (!item) { processQueue(); return; }
@@ -86,6 +83,16 @@ function finishActiveItem(success: boolean, errorNote?: string) {
   if (success) {
     item.status = 'done';
     toast(`Downloaded EP ${item.epNum} — ${item.animeTitle}`, 'success');
+    refreshOfflineList();
+  } else if (opts.cancelled) {
+    item.status = 'failed';
+    item.log += '\nCancelled.';
+    toast(`Cancelled EP ${item.epNum} — ${item.animeTitle}`, 'info');
+  } else if (opts.fatal) {
+    // Retrying can't help (e.g. no downloader installed): fail straight away.
+    item.status = 'failed';
+    if (errorNote) item.log += `\n${errorNote}`;
+    toast(errorNote ?? `EP ${item.epNum} failed.`, 'error');
   } else {
     item.attempts++;
     if (errorNote) item.log += `\n${errorNote}`;
@@ -112,8 +119,22 @@ export function handleDownloadChunk(chunk: string) {
   renderQueuePanel();
 }
 
-export function handleDownloadFinished(success: boolean) {
-  finishActiveItem(success);
+export function handleDownloadFinished(payload: { success?: boolean; fatal?: boolean; cancelled?: boolean; error?: string }) {
+  finishActiveItem(!!payload.success, payload.error, { fatal: payload.fatal, cancelled: payload.cancelled });
+}
+
+export async function cancelActive() {
+  try {
+    await invoke('cancel_download');
+  } catch (e) {
+    toast(`Couldn't cancel: ${e}`, 'error');
+  }
+}
+
+/** The Offline screen lists files on disk; show a finished download right away. */
+function refreshOfflineList() {
+  if (!document.querySelector('.downloads-header, .downloads-empty')) return;
+  import('../views/downloads').then(({ loadDownloads }) => loadDownloads());
 }
 
 // ─── Item Actions ─────────────────────────────────────────────────────────────
@@ -185,19 +206,20 @@ function renderQueueItem(item: DownloadQueueItem): HTMLElement {
   const lastLine = lines[lines.length - 1] ?? '';
 
   row.innerHTML = `
-    <img class="dl-queue-cover" src="${item.cover}" alt="" loading="lazy" onerror="this.style.opacity=0.3"/>
+    <img class="dl-queue-cover" src="${esc(item.cover)}" alt="" loading="lazy"/>
     <div class="dl-queue-info">
       <div class="dl-queue-title-row">${esc(item.animeTitle)} <span class="dl-queue-ep">EP ${item.epNum}</span></div>
       <div class="dl-queue-status">${statusLabel}${item.status === 'downloading' && lastLine ? ` · ${esc(lastLine)}` : ''}</div>
     </div>
     <div class="dl-queue-actions">
-      ${item.status === 'downloading' ? `<div class="spinner spinner-sm"></div>` : ''}
+      ${item.status === 'downloading' ? `<div class="spinner spinner-sm"></div><button class="btn-icon dl-queue-cancel-btn" title="Cancel">■</button>` : ''}
       ${item.log ? `<button class="btn-icon dl-queue-log-btn" title="View log">📄</button>` : ''}
       ${item.status === 'failed' ? `<button class="btn-icon dl-queue-retry-btn" title="Retry">↻</button>` : ''}
       ${item.status !== 'downloading' ? `<button class="btn-icon dl-queue-remove-btn" title="Remove">✕</button>` : ''}
     </div>`;
 
   row.querySelector('.dl-queue-log-btn')?.addEventListener('click', () => openLogModal(item));
+  row.querySelector('.dl-queue-cancel-btn')?.addEventListener('click', () => cancelActive());
   row.querySelector('.dl-queue-retry-btn')?.addEventListener('click', () => retryItem(item.id));
   row.querySelector('.dl-queue-remove-btn')?.addEventListener('click', () => removeItem(item.id));
 

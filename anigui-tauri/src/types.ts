@@ -42,6 +42,16 @@ export interface Media {
   nextAiringEpisode?: NextAiringEpisode;
 }
 
+/** A show started but not finished, kept locally (`in_progress.json`). */
+export interface InProgressEntry {
+  animeId: number;
+  media: Media;        // snapshot for drawing the card and relaunching playback
+  ep: number;          // episode to play next
+  timePos: number;     // seconds into `ep`; 0 = start it from the beginning
+  duration: number;    // length of `ep` in seconds when known, else 0
+  updatedAt: number;   // unix seconds
+}
+
 export interface Config {
   bash_path: string;
   quality: string;
@@ -54,6 +64,9 @@ export interface Config {
   autoplay_next: boolean;
   fullscreen: boolean;
   skip_auto_setup: boolean;
+  // Read-only hints from get_config (never saved): what "automatic" resolves to.
+  detected_bash_path?: string;
+  default_download_dir?: string;
 }
 
 export interface RuntimeStatus {

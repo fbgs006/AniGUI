@@ -94,6 +94,7 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   max-width: 640px;
+  white-space: pre-line;
 }
 .detail-desc.expanded {
   display: block;
@@ -220,3 +221,5 @@
 .playing-active { pointer-events: none; opacity: 0.7; transform: scale(0.98); animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { opacity: 0.7; } 50% { opacity: 1; } 100% { opacity: 0.7; } }
 body.player-loading #play-next { pointer-events: none; opacity: 0.5; filter: grayscale(1); }
+
+.section-sub { font-weight: 400; color: var(--text3); text-transform: none; letter-spacing: 0; }

@@ -4,7 +4,7 @@ import './detail.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media } from '../types';
-import { $, el, formatCountdown, setActiveNav, wireDropdown } from '../utils';
+import { $, el, esc, formatCountdown, wireDropdown } from '../utils';
 import { toast } from '../components/toast';
 import { enqueueDownload } from '../components/download-queue';
 
@@ -37,12 +37,12 @@ function renderRelations(m: Media): string {
     const label = RELATION_LABEL[e.relationType] ?? e.relationType;
     const fmt = e.node.format ? e.node.format.replace(/_/g, " ") : "";
     return `
-      <div class="relation-card" data-id="${e.node.id}" title="${t}">
-        <img src="${e.node.coverImage.medium}" alt="" onerror="this.style.opacity=0.3" />
+      <div class="relation-card" data-id="${e.node.id}" title="${esc(t)}">
+        <img src="${esc(e.node.coverImage.medium)}" alt="" />
         <div class="relation-info">
-          <span class="relation-type">${label}</span>
-          <span class="relation-title">${t}</span>
-          <span class="relation-fmt">${fmt}</span>
+          <span class="relation-type">${esc(label)}</span>
+          <span class="relation-title">${esc(t)}</span>
+          <span class="relation-fmt">${esc(fmt)}</span>
         </div>
       </div>`;
   }).join("");
@@ -85,6 +85,7 @@ export async function playEpisode(ep: number, triggerElement?: HTMLElement) {
   state.playLaunching = true;
   state.activePlayingAnimeId = state.selectedMedia.id;
   state.activePlayingEp = ep;
+  state.playingMedia = state.selectedMedia;
 
   const chip = document.querySelector<HTMLElement>(`.ep-chip[data-ep="${ep}"]`);
   if (triggerElement) {
@@ -102,15 +103,21 @@ export async function playEpisode(ep: number, triggerElement?: HTMLElement) {
   const title = state.selectedMedia.title.english || state.selectedMedia.title.romaji;
   toast(`Launching EP ${ep}…`, "info");
 
-  const result = await invoke<{ error?: string; success?: boolean }>("play_episode", {
-    title,
-    epNum: ep,
-    animeId: state.selectedMedia.id,
-    malId: state.selectedMedia.idMal ?? null,
-    totalEps: state.selectedMedia.episodes ?? 0,
-  });
-  if (result.error) {
-    toast(result.error, "error");
+  let error: string | undefined;
+  try {
+    const result = await invoke<{ error?: string; success?: boolean }>("play_episode", {
+      title,
+      epNum: ep,
+      animeId: state.selectedMedia.id,
+      malId: state.selectedMedia.idMal ?? null,
+      totalEps: state.selectedMedia.episodes ?? 0,
+    });
+    error = result.error;
+  } catch (e) {
+    error = String(e);
+  }
+  if (error) {
+    toast(error, "error");
     state.playLaunching = false;
     resetPlayButtons();
   }
@@ -220,6 +227,23 @@ function buildEpGrid(eps: number, progress: number) {
 
 // ─── Detail Panel ─────────────────────────────────────────────────────────────
 
+/** Episodes that can be played: the total when known, else those already aired. */
+export function availableEpisodes(m: Media): number {
+  if (m.episodes) return m.episodes;
+  const next = m.nextAiringEpisode?.episode;
+  return next && next > 1 ? next - 1 : 0;
+}
+
+/**
+ * AniList descriptions carry some HTML (<br>, <i>…). Parsing in an inert
+ * document turns it into plain text without running anything — a regex
+ * strip misses unterminated tags.
+ */
+function plainText(html: string): string {
+  const doc = new DOMParser().parseFromString(html.replace(/<br\s*\/?>/gi, "\n"), "text/html");
+  return (doc.body.textContent ?? "").trim();
+}
+
 export function renderDetail() {
   if (!state.selectedMedia) return;
   const m = state.selectedMedia;
@@ -228,26 +252,27 @@ export function renderDetail() {
   const eps = m.episodes ?? 0;
   const pct = eps ? Math.round((progress / eps) * 100) : 0;
   const nextEp = progress + 1;
+  const gridEps = availableEpisodes(m);
 
   const main = $("#main-panel");
   const banner = m.bannerImage || m.coverImage.large || m.coverImage.medium;
   main.innerHTML = `
-    <div class="detail-banner fade-in" style="background-image:url('${banner}')"><div class="detail-banner-scrim"></div></div>
+    <div class="detail-banner fade-in" style="background-image:url('${esc(banner)}')"><div class="detail-banner-scrim"></div></div>
     <div class="detail-hero fade-in">
-      <img class="detail-cover" src="${m.coverImage.large || m.coverImage.medium}" alt="${title}" />
+      <img class="detail-cover" src="${esc(m.coverImage.large || m.coverImage.medium)}" alt="${esc(title)}" />
       <div class="detail-info">
-        <div class="detail-title">${title}</div>
+        <div class="detail-title">${esc(title)}</div>
         <div class="detail-meta-row">
-          ${m.genres.slice(0, 4).map(g => `<span class="genre-pill">${g}</span>`).join("")}
-          ${m.averageScore ? `<span class="score-badge">★ ${m.averageScore}%</span>` : ""}
-          ${m.season ? `<span class="season-badge">${m.season} ${m.seasonYear ?? ""}</span>` : ""}
+          ${m.genres.slice(0, 4).map(g => `<span class="genre-pill">${esc(g)}</span>`).join("")}
+          ${m.averageScore ? `<span class="score-badge">★ ${esc(m.averageScore)}%</span>` : ""}
+          ${m.season ? `<span class="season-badge">${esc(m.season)} ${esc(m.seasonYear)}</span>` : ""}
           ${m.status === "RELEASING" && m.nextAiringEpisode
             ? `<span class="airing-badge">EP ${m.nextAiringEpisode.episode} airing in ${formatCountdown(m.nextAiringEpisode.timeUntilAiring)}</span>`
             : ""}
         </div>
         ${m.description ? `
         <div class="detail-desc-wrap">
-          <p class="detail-desc" id="detail-desc">${m.description.replace(/<[^>]*>/g, "").trim()}</p>
+          <p class="detail-desc" id="detail-desc">${esc(plainText(m.description))}</p>
           <button type="button" class="detail-desc-toggle" id="detail-desc-toggle">Show more</button>
         </div>` : ""}
         ${eps ? `
@@ -259,7 +284,7 @@ export function renderDetail() {
           <div class="progress-bar"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
         </div>` : ""}
         <div class="action-row">
-          ${eps && nextEp <= eps ? `<button class="btn btn-primary" id="play-next">▶ Play EP ${nextEp}</button>` : ""}
+          ${gridEps && nextEp <= gridEps ? `<button class="btn btn-primary" id="play-next">▶ Play EP ${nextEp}</button>` : ""}
           <div class="dropdown dropdown-down" id="detail-status-dropdown">
             <button type="button" class="status-select dropdown-trigger" id="detail-status-trigger"></button>
             <div class="dropdown-menu" id="detail-status-menu">
@@ -273,9 +298,9 @@ export function renderDetail() {
     </div>
 
     <div class="detail-body">
-      ${eps ? `
+      ${gridEps ? `
       <div class="card fade-in">
-        <div class="section-title">Episodes</div>
+        <div class="section-title">Episodes${eps ? "" : ` <span class="section-sub">· ${gridEps} out so far</span>`}</div>
         <div class="ep-grid" id="ep-grid"></div>
         <div style="margin-top:16px;display:flex;gap:10px;" id="ep-actions" class="hidden">
           <button class="btn btn-primary" id="btn-play-selected">▶ Play</button>
@@ -299,8 +324,8 @@ export function renderDetail() {
     });
   }
 
-  // Airing shows with unknown episode count
-  if (!eps) {
+  // Episode count unknown and nothing known to be out yet: free-form entry.
+  if (!gridEps) {
     const actions = main.querySelector<HTMLElement>(".action-row");
     if (actions) {
       actions.insertAdjacentHTML("afterbegin",
@@ -323,9 +348,28 @@ export function renderDetail() {
   statusTrigger.disabled = !state.config.anilist_token;
   wireDropdown("detail-status-dropdown", "detail-status-trigger", "detail-status-menu", async (value) => {
     if (!m.id || !value) return;
+    const previous = statusTrigger.textContent;
     statusTrigger.textContent = `${DETAIL_STATUS_LABELS[value] ?? value} ▾`;
-    await invoke("update_status", { mediaId: m.id, status: value });
-    toast("Status updated!", "success");
+    try {
+      const res = await invoke<any>("update_status", {
+        mediaId: m.id,
+        status: value,
+        entryId: m.mediaListEntry?.id || null,
+      });
+      if (value === "Not in List") {
+        m.mediaListEntry = undefined;
+        toast(res?.deleted ? "Removed from your list." : "It wasn't on your list.", "success");
+      } else {
+        const saved = res?.data?.SaveMediaListEntry;
+        m.mediaListEntry = saved
+          ? { id: saved.id, progress: saved.progress ?? 0, status: saved.status }
+          : { id: m.mediaListEntry?.id ?? 0, progress: m.mediaListEntry?.progress ?? 0, status: value };
+        toast("Status updated!", "success");
+      }
+    } catch (e) {
+      statusTrigger.textContent = previous;
+      toast(`Couldn't update status: ${e}`, "error");
+    }
   });
 
   // Play-next button
@@ -349,7 +393,7 @@ export function renderDetail() {
     });
   }
 
-  if (eps) buildEpGrid(eps, progress);
+  if (gridEps) buildEpGrid(gridEps, progress);
   attachRelationClicks();
 }
 
@@ -358,6 +402,5 @@ export function renderDetail() {
 export function selectMedia(media: Media) {
   state.selectedMedia = media;
   state.selectedEp = null;
-  setActiveNav('btn-watching');
   renderDetail();
 }

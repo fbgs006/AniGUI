@@ -42,6 +42,8 @@ export async function checkForUpdateManual() {
   }
 }
 
+let bannerWired = false;
+
 function showUpdateBanner(version: string) {
   const banner = document.getElementById('update-banner');
   const label  = document.getElementById('update-version-label');
@@ -49,6 +51,11 @@ function showUpdateBanner(version: string) {
 
   label.textContent = `v${version} is available`;
   banner.classList.add('show');
+
+  // Checking again from Settings re-shows the banner; its buttons must not
+  // pile up a second handler each time.
+  if (bannerWired) return;
+  bannerWired = true;
 
   document.getElementById('update-install-btn')?.addEventListener('click', async () => {
     const btn = document.getElementById('update-install-btn') as HTMLButtonElement;
@@ -60,7 +67,7 @@ function showUpdateBanner(version: string) {
     } catch (e) {
       btn.textContent = 'Update Now';
       btn.disabled = false;
-      console.error('[updater] install failed:', e);
+      toast(`Update failed: ${e}`, 'error');
     }
   });
 

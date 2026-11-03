@@ -4,7 +4,7 @@ import './browse.css';
 import { invoke } from '@tauri-apps/api/core';
 import { state } from '../state';
 import type { Media } from '../types';
-import { el, setActiveNav } from '../utils';
+import { el, esc, setActiveNav } from '../utils';
 import { toast } from '../components/toast';
 import { getSeason, getNextSeason, seasonLabel } from '../utils';
 
@@ -57,6 +57,11 @@ export async function loadBrowse() {
       { title: "🏆 All Time Popular", items: allTime?.data?.Page?.media ?? [] },
     ];
     const failed = [trending, popular, upcoming, allTime].map(v => v === null);
+    if (failed.every(Boolean) && !browseCache) {
+      const firstError = results.find((r): r is PromiseRejectedResult => r.status === "rejected")?.reason;
+      showLoadError(main, `Couldn't reach AniList: ${firstError}`, loadBrowse);
+      return;
+    }
 
     // Merge with previous cache: keep old data only for sections that actually
     // failed this time — a section that genuinely came back empty stays empty.
@@ -76,7 +81,7 @@ export async function loadBrowse() {
     if (browseCache) {
       renderBrowse(browseCache.rows);
     } else {
-      main.innerHTML = `<div class="welcome"><p style="color:var(--red)">Failed to load browse: ${e}</p></div>`;
+      showLoadError(main, `Failed to load browse: ${e}`, loadBrowse);
     }
   }
 }
@@ -124,7 +129,7 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
     <input id="browse-title-filter" type="search" placeholder="Search titles or genres…" />
     <select id="browse-year-filter"><option value="">Any year</option>${years.map(y => `<option value="${y}">${y}</option>`).join("")}</select>
     <select id="browse-season-filter"><option value="">Any season</option><option value="WINTER">Winter</option><option value="SPRING">Spring</option><option value="SUMMER">Summer</option><option value="FALL">Fall</option></select>
-    <select id="browse-format-filter"><option value="">Any format</option>${formats.map(f => `<option value="${f}">${f.replace("_", " ")}</option>`).join("")}</select>
+    <select id="browse-format-filter"><option value="">Any format</option>${formats.map(f => `<option value="${esc(f)}">${esc(f.replace(/_/g, " "))}</option>`).join("")}</select>
     <select id="browse-sort-filter"><option value="default">Default Sort</option><option value="score_desc">Highest Rated</option><option value="score_asc">Lowest Rated</option><option value="year_desc">Newest</option><option value="year_asc">Oldest</option></select>
     <button class="btn btn-outline" id="browse-clear-filters">Clear</button>
     <button class="btn-icon browse-view-toggle-btn" id="browse-view-toggle" title="Toggle List View">
@@ -156,18 +161,18 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
     const card = el("article", "browse-card");
     const title = media.title.english || media.title.romaji;
     const score = media.averageScore;
-    const format = media.format?.replace("_", " ") ?? "Anime";
+    const format = media.format?.replace(/_/g, " ") ?? "Anime";
     const episodes = media.episodes ? `${media.episodes} eps` : "Coming soon";
     card.innerHTML = `
-      <img src="${media.coverImage.large || media.coverImage.medium}" alt="${title}" loading="lazy" onerror="this.style.opacity=0.3" />
+      <img src="${esc(media.coverImage.large || media.coverImage.medium)}" alt="${esc(title)}" loading="lazy" />
       <div class="browse-card-overlay">
-        <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${score}%</span>` : ""}<span>${format}</span></div>
-        <span class="browse-card-title">${title}</span>
-        <span class="browse-card-year">${episodes}${media.seasonYear ? ` · ${media.seasonYear}` : ""}</span>
+        <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${esc(score)}%</span>` : ""}<span>${esc(format)}</span></div>
+        <span class="browse-card-title">${esc(title)}</span>
+        <span class="browse-card-year">${esc(episodes)}${media.seasonYear ? ` · ${esc(media.seasonYear)}` : ""}</span>
       </div>
       <div class="browse-card-list-info">
-        <span class="browse-card-title">${title}</span>
-        <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${score}%</span>` : ""}<span>${format}</span><span>${episodes}${media.seasonYear ? ` · ${media.seasonYear}` : ""}</span></div>
+        <span class="browse-card-title">${esc(title)}</span>
+        <div class="browse-card-topline">${score ? `<span class="browse-card-score">★ ${esc(score)}%</span>` : ""}<span>${esc(format)}</span><span>${esc(episodes)}${media.seasonYear ? ` · ${esc(media.seasonYear)}` : ""}</span></div>
       </div>
     `;
     card.addEventListener("click", async () => {
@@ -232,6 +237,13 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
         contentDiv.appendChild(loadMoreBtn);
       }
     } catch (e) {
+      if (!loadMore) {
+        contentDiv.innerHTML = `<div class="browse-empty">Search failed: ${esc(String(e))}</div>`;
+      } else {
+        searchPage--;
+        const btn = contentDiv.querySelector("#load-more-btn");
+        if (btn) btn.innerHTML = "Load More Results";
+      }
       toast(`Search failed: ${e}`, "error");
     } finally {
       searchLoading = false;
@@ -305,4 +317,14 @@ function renderBrowse(rows: { title: string; items: Media[]; tab?: typeof state.
     updateGenreHint();
     drawRows();
   });
+}
+
+/** Full-panel error with a retry button (shared by Home and Browse). */
+export function showLoadError(host: HTMLElement, message: string, retry: () => void) {
+  host.innerHTML = `
+    <div class="welcome load-error">
+      <p style="color:var(--red)">${esc(message)}</p>
+      <button class="btn btn-outline" type="button">↻ Try again</button>
+    </div>`;
+  host.querySelector("button")!.addEventListener("click", () => retry());
 }

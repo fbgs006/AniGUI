@@ -470,6 +470,11 @@ local mp = require 'mp'
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 
+-- Only track playback AniGUI started (play_episode exports ANIGUI_EP). This
+-- script can land in a user's own mpv config, and their other videos must not
+-- be logged or auto-resumed.
+if not os.getenv("ANIGUI_EP") then return end
+
 -- Mirrors the Rust side's dirs_next::data_dir(): %APPDATA% on Windows,
 -- $XDG_DATA_HOME (or ~/.local/share) on Linux.
 local appdata = os.getenv("APPDATA")
@@ -519,11 +524,15 @@ mp.register_event("file-loaded", function()
     local title = mp.get_property("media-title")
     if not title then return end
 
-    local data = read_json()
-    if data[title] then
-        local time = data[title]
+    -- AniGUI passes the position it saved for this show; fall back to the
+    -- title-keyed timestamps for episodes it has no record of.
+    local time = tonumber(os.getenv("ANIGUI_RESUME") or "")
+    if not time then
+        time = read_json()[title]
+    end
+    if time then
         mp.commandv("seek", tostring(time), "absolute")
-        mp.osd_message("AniGUI: Resumed at " .. tostring(math.floor(time)) .. "s")
+        mp.osd_message(string.format("Resumed at %d:%02d", math.floor(time / 60), math.floor(time % 60)), 3)
     end
 end)
 

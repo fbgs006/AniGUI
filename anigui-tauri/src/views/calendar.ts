@@ -3,12 +3,14 @@ import './calendar.css';
 
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from '../components/toast';
-import { setActiveNav } from '../utils';
+import { state } from '../state';
+import { setActiveNav, esc } from '../utils';
 
 // ─── Entry Point ──────────────────────────────────────────────────────────────
 
 export async function loadCalendar() {
   setActiveNav('btn-calendar');
+  state.selectedMedia = null;
 
   const main = document.getElementById('main-panel')!;
   main.innerHTML = `
@@ -42,7 +44,9 @@ export async function loadCalendar() {
     if (grid) grid.innerHTML = `<div class="calendar-empty">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       <span>Failed to load airing schedule</span>
+      <button class="btn btn-outline" id="calendar-retry" type="button">↻ Try again</button>
     </div>`;
+    document.getElementById('calendar-retry')?.addEventListener('click', () => loadCalendar());
     toast('Failed to load airing schedule.', 'error');
   }
 }
@@ -94,7 +98,7 @@ function buildGrid(schedules: any[]) {
               return `
                 <div class="cal-entry${isPast ? ' cal-entry--past' : ''}"
                      data-id="${media.id}" data-title="${esc(title)}" title="${esc(title)}">
-                  <img class="cal-cover" src="${media.coverImage.medium}" alt="" loading="lazy" onerror="this.style.opacity=0.3"/>
+                  <img class="cal-cover" src="${esc(media.coverImage.medium)}" alt="" loading="lazy"/>
                   <div class="cal-entry-body">
                     <div class="cal-entry-title">${esc(title)}</div>
                     <div class="cal-entry-badges">
@@ -146,6 +150,3 @@ function renderSkeletons(): string {
   `).join('');
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}

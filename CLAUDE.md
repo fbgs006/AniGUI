@@ -18,7 +18,7 @@ npm run build              # tsc typecheck + vite build (frontend only)
 npm run tauri build        # produce the installer/portable .exe
 
 cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust typecheck (what CI runs)
-cargo test --manifest-path src-tauri/Cargo.toml    # run Rust unit tests (in src-tauri/src/lib.rs, mod backend_helper_tests)
+cargo test --manifest-path src-tauri/Cargo.toml    # run Rust unit tests (a `#[cfg(test)] mod tests` at the bottom of each module)
 ```
 
 There is no frontend test runner configured — TypeScript correctness is checked only via `tsc` during `npm run build`.
@@ -32,15 +32,32 @@ CI (`.github/workflows/ci.yml`) runs on `windows-latest` and does exactly: `npm 
 The app is a GUI shell around two external CLI tools that must be present on the user's system and are invoked as subprocesses:
 - **`ani-cli`** — does the actual anime scraping/streaming; invoked via `bash -lc "ani-cli ..."`.
 - **`mpv`** — the video player `ani-cli` launches; AniGUI installs a Lua tracking script into mpv's `scripts/` directory (see below).
-- **Git Bash (`bash.exe`)** — required because `ani-cli` is a bash script. Its path is auto-detected (`find_bash` in `lib.rs`) or set manually in Settings.
+- **Git Bash (`bash.exe`)** — required because `ani-cli` is a bash script. Its path is auto-detected (`find_bash` in `shell.rs`) or set manually in Settings.
 
 Keep this in mind when changing anything under `play_episode`/`start_download`: these functions shell out to bash and parse ANSI-laden stdout, they don't call a library. Never interpolate data (titles, paths) into the `-lc` script text — pass it as env vars (`ANIGUI_TITLE`, `ANIGUI_QUALITY`, `ANIGUI_DL_DIR`) and reference `"$VAR"` in the script.
 
 ## Architecture
 
-### Backend (`src-tauri/src/lib.rs`, single file)
+### Backend (`src-tauri/src/`)
 
-- All Tauri commands live in this one file and are registered in the `invoke_handler![...]` list in `run()` at the bottom — new commands must be added there.
+One module per responsibility (Single Responsibility Principle — keep it that way when adding code):
+
+| Module | Owns |
+|---|---|
+| `lib.rs` | Entry point only: builds `AppState`, registers commands |
+| `state.rs` | `AppState` |
+| `config.rs` | `Config`, its file on disk, `get_config`/`save_config` |
+| `shell.rs` | Finding/spawning bash, killing process trees |
+| `anilist/client.rs` | GraphQL transport (`anilist_query`, retries, expired token), `viewer_id` |
+| `anilist/queries.rs` | GraphQL documents only (no I/O) |
+| `anilist/commands.rs` | AniList-backed Tauri commands |
+| `playback.rs` | `play_episode`, next/prev navigation |
+| `downloads.rs` | `start_download`/`cancel_download`, downloaded files |
+| `history.rs` | `history.json`, `in_progress.json` |
+| `updates.rs` | App updater, ani-cli version check/update |
+| `bootstrap.rs` | Private runtime install (Git Bash, mpv, fzf, ani-cli, uosc) |
+
+- Commands live in the module that owns their responsibility and are registered by path (`history::get_history`) in the `invoke_handler![...]` list in `lib.rs`'s `run()` — new commands must be added there.
 - `AppState` holds the shared `Config` (Mutex-guarded, persisted to `%APPDATA%/anicli-gui/config.json`), a `player_active` flag preventing two simultaneous `mpv` launches, and a shared `reqwest::Client` (15s timeout) reused for all HTTP calls.
 - All AniList access goes through `anilist_query()`, which retries anonymously when AniList rejects the token as invalid (so an expired login never breaks public Browse/Search/Calendar) and only then reports the expired login. The viewer id is cached per token (`viewer_id()`). It POSTs GraphQL to `https://graphql.anilist.co`, retries on 429/rate-limit/transient errors (up to 2 retries with backoff), and treats a blank token as anonymous (`usable_anilist_token`) so Browse/Search still work logged-out.
 - GraphQL query strings are built with the shared `MEDIA_FIELDS` fragment (see functions like `trending_query()`, `search_query()`, `advanced_search_query()`) — when adding a new AniList query, reuse this fragment rather than duplicating fields, and make sure `mediaListEntry { id progress status }` is included so logged-in progress renders on Browse/Search too (there's a regression test for this: `discovery_queries_request_viewer_progress_when_logged_in`).
@@ -50,13 +67,13 @@ Keep this in mind when changing anything under `play_episode`/`start_download`: 
 - `install_mpv_script()` also writes `anigui-controls.lua` (source: `src-tauri/lua/anigui-controls.lua`, embedded via `include_str!`). It only activates when mpv is launched by `play_episode` (which exports `ANIGUI_EP`, `ANIGUI_EP_TOTAL`, `ANIGUI_MAL_ID`, `ANIGUI_NAV_FILE`) and provides AniSkip OP/ED skipping and next/previous episode (`>`/`<`). While an OP/ED (or, without AniSkip data, the last 25s) plays it draws a clickable Netflix-style button ("Skip Opening" / "Next Episode") as an ASS overlay; `Tab` triggers the same action. Its click binding is only enabled while the pointer hovers the button so uosc keeps every other click. With `Config.autoplay_next` (default on, exported as `ANIGUI_AUTOPLAY`) a natural end-of-file also requests the next episode. `Config.fullscreen` (default on, `ANIGUI_FULLSCREEN`) makes it open mpv fullscreen. Each episode is a separate `ani-cli` run, so next/prev works by the script writing `%APPDATA%/AniGUI/nav.json` and quitting mpv; `play_episode`'s thread loop reads it and relaunches the target episode, emitting `playback_episode_changed`. `playback_finished` is emitted once per episode played, with that episode's own `epNum`.
 - `bootstrap::ensure_player_ui()` installs uosc into the *bundled* mpv's `portable_config/` (never a user's own mpv) and writes a managed block into its `mpv.conf` plus `script-opts/uosc.conf`. mpv names scripts with `_` instead of `-`, so uosc buttons must reference `script-binding anigui_controls/...`. It runs at startup (background) and from `install_runtime`; failure is non-fatal.
 - `bootstrap.rs` installs a private runtime on both platforms, branching with `cfg!(windows)`: Windows gets PortableGit + mpv-winbuild + fzf.exe + ani-cli under `%APPDATA%/AniGUI/runtime/`; Linux (x86_64/aarch64) uses the system bash and downloads the `pkgforge-dev/mpv-AppImage` build (extracted once, launched through an `mpv` shell script that sets `MPV_HOME` to the runtime's `portable_config`), the fzf tarball, and ani-cli under `~/.local/share/AniGUI/runtime/`. Other platforms report `auto_install_supported: false` and the UI shows manual-install instructions instead. On Linux the bundled dirs are put on PATH by prefixing the `bash -lc` script (`shell_command()` / `shell_path_prefix()`), not via env — Debian/Ubuntu's `/etc/profile` resets PATH for login shells. The Linux branch can only be exercised on Linux (no cross-compile check on the Windows dev box).
-- Unit tests (`#[cfg(test)] mod backend_helper_tests`) cover version-comparison logic (`anicli_update_available`) and the anonymous-token/query-shape invariants above — extend these when touching that logic.
+- Unit tests (`#[cfg(test)] mod tests` in each module) cover version-comparison logic (`anicli_update_available`) and the anonymous-token/query-shape invariants above — extend these when touching that logic.
 
 ### Frontend (`src/`)
 
 - `main.ts` is intentionally slim: it wires DOM events and Tauri event listeners (`player_closed`, `playback_finished`, `download_chunk`, `download_finished`) and delegates everything else. Follow this pattern — don't grow `main.ts`.
 - `state.ts` exports a single mutable `state` object that every view/component reads and writes directly (no store/reducer layer). This is the one source of truth for cross-view data (current tab, sidebar list, selected media, playback/download progress, pending sync).
-- `types.ts` mirrors the Rust `Config`/GraphQL shapes on the frontend — keep both in sync when changing `Config` fields in `lib.rs`. `get_config` returns the user's raw overrides for `bash_path`/`download_dir` (empty = automatic) plus read-only `detected_bash_path`/`default_download_dir` hints; Settings shows the hints as placeholders and must never save them back.
+- `types.ts` mirrors the Rust `Config`/GraphQL shapes on the frontend — keep both in sync when changing `Config` fields in `config.rs`. `get_config` returns the user's raw overrides for `bash_path`/`download_dir` (empty = automatic) plus read-only `detected_bash_path`/`default_download_dir` hints; Settings shows the hints as placeholders and must never save them back.
 - The webview runs under a CSP (`tauri.conf.json` → `app.security.csp`/`devCsp`): no inline scripts, so no inline `onerror=`/`onclick=` attributes (image fallback is a global listener, `wireImageFallback()`). Anything from AniList or disk interpolated into `innerHTML` goes through `esc()` from `utils.ts`; destructive actions ask first via `confirmAction()`.
 - `views/` (`browse`, `detail`, `sidebar`, `downloads`, `calendar`, `profile`) each pair a `.ts` file with its own `.css` file and export loader functions (`loadBrowse`, `loadTab`, etc.) called from `main.ts`. `views/browse.ts` keeps a short-lived (2 min) in-memory cache to avoid re-hitting AniList on every tab click — follow that pattern for other expensive aggregate views rather than adding a global cache layer.
 - `components/` holds small reusable UI: `toast`, `sync-bar` (the "sync this episode?" confirm banner), `settings` panel, `shortcuts` overlay, and the `updater`/`anicli-updater` self-update checks.

@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::AppState;
+use crate::state::AppState;
 
 /// Suppresses the console window Windows would otherwise pop for a
 /// console-subsystem child (bash.exe, the PortableGit SFX) spawned from this
@@ -732,7 +732,7 @@ fn missing_system_tools(windows: bool) -> Vec<&'static str> {
 pub fn skip_runtime_setup(state: State<'_, AppState>) -> bool {
     let mut cfg = state.config.lock().unwrap();
     cfg.skip_auto_setup = Some(true);
-    crate::save_config_to_disk(&state.config_path, &cfg);
+    crate::config::save_config_to_disk(&state.config_path, &cfg);
     true
 }
 

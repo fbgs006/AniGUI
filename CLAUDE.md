@@ -57,6 +57,11 @@ One module per responsibility (Single Responsibility Principle — keep it that 
 | `updates.rs` | App updater, ani-cli version check/update |
 | `bootstrap.rs` | Private runtime install (Git Bash, mpv, fzf, ani-cli, uosc) |
 
+Dependency Inversion: logic that talks to AniList or to disk depends on a trait, not the concrete thing, so it is testable offline. Tauri commands are thin adapters that pick the real implementation and call a plain function holding the logic:
+- `anilist::client::AniListApi` — real: `HttpAniList(&state.http)`; tests: `anilist::client::fake::FakeAniList` (scripted replies, records every call). New AniList logic goes in a function taking `api: &impl AniListApi`, not `&AppState`.
+- `history::ListStore` — real: `JsonFile`; tests: an in-memory store.
+- Time is passed in (`fetch_airing_schedule(.., now, ..)`) rather than read inside the logic.
+
 - Commands live in the module that owns their responsibility and are registered by path (`history::get_history`) in the `invoke_handler![...]` list in `lib.rs`'s `run()` — new commands must be added there.
 - `AppState` holds the shared `Config` (Mutex-guarded, persisted to `%APPDATA%/anicli-gui/config.json`), a `player_active` flag preventing two simultaneous `mpv` launches, and a shared `reqwest::Client` (15s timeout) reused for all HTTP calls.
 - All AniList access goes through `anilist_query()`, which retries anonymously when AniList rejects the token as invalid (so an expired login never breaks public Browse/Search/Calendar) and only then reports the expired login. The viewer id is cached per token (`viewer_id()`). It POSTs GraphQL to `https://graphql.anilist.co`, retries on 429/rate-limit/transient errors (up to 2 retries with backoff), and treats a blank token as anonymous (`usable_anilist_token`) so Browse/Search still work logged-out.

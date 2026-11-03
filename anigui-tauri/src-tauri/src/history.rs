@@ -1,73 +1,112 @@
 //! Local, login-free records: the watch history and the "continue watching"
 //! list (`history.json` / `in_progress.json`).
 
+use std::path::PathBuf;
+
 use serde_json::Value;
 
-fn get_history_path() -> std::path::PathBuf {
+/// Where a list of JSON records is kept.
+///
+/// Dependency Inversion: the history logic below only knows this trait, not
+/// the file system. The app uses `JsonFile`; tests use an in-memory store.
+pub(crate) trait ListStore {
+    /// The stored list; missing or unreadable data reads as empty.
+    fn load(&self) -> Vec<Value>;
+    /// Replaces the stored list. Returns whether it was written.
+    fn save(&self, list: &[Value]) -> bool;
+}
+
+/// A list stored as a pretty-printed JSON array in one file.
+pub(crate) struct JsonFile(PathBuf);
+
+impl ListStore for JsonFile {
+    fn load(&self) -> Vec<Value> {
+        std::fs::read_to_string(&self.0)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, list: &[Value]) -> bool {
+        if let Some(parent) = self.0.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        serde_json::to_string_pretty(list)
+            .map(|data| std::fs::write(&self.0, data).is_ok())
+            .unwrap_or(false)
+    }
+}
+
+fn app_file(name: &str) -> JsonFile {
     let base = dirs_next::config_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default());
-    base.join("anicli-gui").join("history.json")
+    JsonFile(base.join("anicli-gui").join(name))
+}
+
+/// Every episode played, newest first.
+fn history_file() -> JsonFile {
+    app_file("history.json")
 }
 
 /// Shows started but not finished (local "continue watching"), one entry per
 /// anime, newest first. Written by the frontend after each episode.
-fn get_in_progress_path() -> std::path::PathBuf {
-    let base = dirs_next::config_dir().unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default());
-    base.join("anicli-gui").join("in_progress.json")
+fn in_progress_file() -> JsonFile {
+    app_file("in_progress.json")
 }
+
+const HISTORY_LIMIT: usize = 200;
+const IN_PROGRESS_LIMIT: usize = 50;
+
+// ─── Commands (adapters) ─────────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn append_history(entry: Value) -> bool {
-    let path = get_history_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut history: Vec<Value> = if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    history.insert(0, entry);
-    history.truncate(200);
-    if let Ok(data) = serde_json::to_string_pretty(&history) {
-        let _ = std::fs::write(&path, data);
-        true
-    } else {
-        false
-    }
+    push_history(&history_file(), entry)
 }
 
 #[tauri::command]
 pub fn get_history() -> Value {
-    let path = get_history_path();
-    if !path.exists() {
-        return serde_json::json!([]);
-    }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!([]))
+    Value::Array(history_file().load())
 }
 
-const IN_PROGRESS_LIMIT: usize = 50;
+#[tauri::command]
+pub fn clear_history() -> bool {
+    let _ = history_file().save(&[]);
+    true
+}
 
 pub(crate) fn read_in_progress() -> Vec<Value> {
-    std::fs::read_to_string(get_in_progress_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    in_progress_file().load()
 }
 
-fn write_in_progress(list: &[Value]) -> bool {
-    let path = get_in_progress_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    serde_json::to_string_pretty(list)
-        .map(|data| std::fs::write(&path, data).is_ok())
-        .unwrap_or(false)
+#[tauri::command]
+pub fn get_in_progress() -> Value {
+    Value::Array(read_in_progress())
+}
+
+#[tauri::command]
+pub fn save_in_progress(entry: Value) -> bool {
+    let store = in_progress_file();
+    store.save(&upsert_in_progress(store.load(), entry))
+}
+
+#[tauri::command]
+pub fn remove_in_progress(anime_id: i64) -> bool {
+    drop_in_progress(&in_progress_file(), anime_id)
+}
+
+// ─── Logic (depends only on ListStore) ───────────────────────────────────────
+
+fn push_history(store: &impl ListStore, entry: Value) -> bool {
+    let mut history = store.load();
+    history.insert(0, entry);
+    history.truncate(HISTORY_LIMIT);
+    store.save(&history)
+}
+
+fn drop_in_progress(store: &impl ListStore, anime_id: i64) -> bool {
+    let mut list = store.load();
+    list.retain(|e| e["animeId"].as_i64() != Some(anime_id));
+    store.save(&list)
 }
 
 /// Replaces `entry`'s anime in `list` and moves it to the front.
@@ -88,30 +127,6 @@ pub(crate) fn resume_position(list: &[Value], anime_id: i64, ep: i64) -> Option<
 }
 
 #[tauri::command]
-pub fn get_in_progress() -> Value {
-    Value::Array(read_in_progress())
-}
-
-#[tauri::command]
-pub fn save_in_progress(entry: Value) -> bool {
-    write_in_progress(&upsert_in_progress(read_in_progress(), entry))
-}
-
-#[tauri::command]
-pub fn remove_in_progress(anime_id: i64) -> bool {
-    let mut list = read_in_progress();
-    list.retain(|e| e["animeId"].as_i64() != Some(anime_id));
-    write_in_progress(&list)
-}
-
-#[tauri::command]
-pub fn clear_history() -> bool {
-    let path = get_history_path();
-    let _ = std::fs::write(&path, "[]");
-    true
-}
-
-#[tauri::command]
 pub fn export_history_csv(path: String, csv: String) -> Result<Value, String> {
     // The path comes from a save dialog; refusing anything but .csv keeps this
     // from being a general "write any file" command.
@@ -129,6 +144,51 @@ pub fn export_history_csv(path: String, csv: String) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    #[derive(Default)]
+    struct MemoryStore(RefCell<Vec<Value>>);
+
+    impl ListStore for MemoryStore {
+        fn load(&self) -> Vec<Value> {
+            self.0.borrow().clone()
+        }
+        fn save(&self, list: &[Value]) -> bool {
+            *self.0.borrow_mut() = list.to_vec();
+            true
+        }
+    }
+
+    #[test]
+    fn history_is_newest_first_and_capped() {
+        let store = MemoryStore::default();
+        for i in 0..(HISTORY_LIMIT + 5) {
+            push_history(&store, serde_json::json!({ "n": i }));
+        }
+        let history = store.load();
+        assert_eq!(history.len(), HISTORY_LIMIT);
+        assert_eq!(history[0]["n"], HISTORY_LIMIT + 4);
+    }
+
+    #[test]
+    fn removing_a_show_keeps_the_others() {
+        let store = MemoryStore::default();
+        store.save(&[serde_json::json!({ "animeId": 1 }), serde_json::json!({ "animeId": 2 })]);
+        drop_in_progress(&store, 1);
+        assert_eq!(store.load(), vec![serde_json::json!({ "animeId": 2 })]);
+    }
+
+    #[test]
+    fn json_file_round_trips_and_tolerates_a_missing_file() {
+        let dir = std::env::temp_dir().join(format!("anigui-test-{}", std::process::id()));
+        let file = JsonFile(dir.join("sub").join("list.json"));
+        assert!(file.load().is_empty());
+
+        let list = vec![serde_json::json!({ "animeId": 1 })];
+        assert!(file.save(&list), "creates missing folders");
+        assert_eq!(file.load(), list);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn in_progress_keeps_one_entry_per_anime_newest_first() {

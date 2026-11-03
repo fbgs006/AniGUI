@@ -1,9 +1,33 @@
 //! Talking to AniList: the HTTP/GraphQL transport (retries, expired tokens)
 //! and the cached viewer id. Knows nothing about which queries exist.
 
+use std::future::Future;
+use std::sync::Mutex;
+
 use serde_json::Value;
 
-use crate::state::AppState;
+/// What the rest of the app needs from AniList: run one GraphQL document.
+///
+/// Dependency Inversion: the commands depend on this abstraction, not on
+/// `reqwest` or the real server. Production passes `HttpAniList`; tests pass
+/// `fake::FakeAniList`, so the command logic is testable offline.
+pub(crate) trait AniListApi: Sync {
+    fn query(
+        &self,
+        query: &str,
+        variables: Value,
+        token: Option<&str>,
+    ) -> impl Future<Output = Result<Value, String>> + Send;
+}
+
+/// The real AniList, over HTTP (graphql.anilist.co).
+pub(crate) struct HttpAniList<'a>(pub(crate) &'a reqwest::Client);
+
+impl AniListApi for HttpAniList<'_> {
+    async fn query(&self, query: &str, variables: Value, token: Option<&str>) -> Result<Value, String> {
+        anilist_query(self.0, query, variables, token).await
+    }
+}
 
 const ANILIST_API: &str = "https://graphql.anilist.co";
 
@@ -21,7 +45,7 @@ fn is_invalid_token_error(message: &str) -> bool {
 
 const EXPIRED_LOGIN: &str = "Your AniList login has expired — log in again in Settings.";
 
-pub(crate) async fn anilist_query(
+async fn anilist_query(
     client: &reqwest::Client,
     query: &str,
     variables: Value,
@@ -117,16 +141,60 @@ const VIEWER_QUERY: &str = "query { Viewer { id } }";
 
 /// The logged-in user's id, looked up once per token: every list query needs
 /// it, and asking AniList each time doubled the request count.
-pub(crate) async fn viewer_id(state: &AppState, token: &str) -> Result<i64, String> {
-    if let Some((cached_token, id)) = state.viewer.lock().unwrap().clone() {
+/// `cache` holds the last (token, id) pair (`AppState::viewer` in the app).
+pub(crate) async fn viewer_id(
+    api: &impl AniListApi,
+    cache: &Mutex<Option<(String, i64)>>,
+    token: &str,
+) -> Result<i64, String> {
+    if let Some((cached_token, id)) = cache.lock().unwrap().clone() {
         if cached_token == token {
             return Ok(id);
         }
     }
-    let viewer = anilist_query(&state.http, VIEWER_QUERY, serde_json::json!({}), Some(token)).await?;
+    let viewer = api.query(VIEWER_QUERY, serde_json::json!({}), Some(token)).await?;
     let id = viewer["data"]["Viewer"]["id"].as_i64().ok_or("Could not get user ID")?;
-    *state.viewer.lock().unwrap() = Some((token.to_string(), id));
+    *cache.lock().unwrap() = Some((token.to_string(), id));
     Ok(id)
+}
+
+/// A scripted stand-in for AniList, for tests in any module.
+#[cfg(test)]
+pub(crate) mod fake {
+    use super::AniListApi;
+    use serde_json::Value;
+    use std::sync::Mutex;
+
+    type Responder = Box<dyn Fn(&str, &Value) -> Result<Value, String> + Send + Sync>;
+
+    /// One recorded request: (query, variables, token).
+    pub(crate) type Call = (String, Value, Option<String>);
+
+    pub(crate) struct FakeAniList {
+        respond: Responder,
+        calls: Mutex<Vec<Call>>,
+    }
+
+    impl FakeAniList {
+        /// `respond` gets each request's query and variables and returns the reply.
+        pub(crate) fn new(
+            respond: impl Fn(&str, &Value) -> Result<Value, String> + Send + Sync + 'static,
+        ) -> Self {
+            Self { respond: Box::new(respond), calls: Mutex::new(Vec::new()) }
+        }
+
+        pub(crate) fn calls(&self) -> Vec<Call> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl AniListApi for FakeAniList {
+        async fn query(&self, query: &str, variables: Value, token: Option<&str>) -> Result<Value, String> {
+            let reply = (self.respond)(query, &variables);
+            self.calls.lock().unwrap().push((query.to_string(), variables, token.map(str::to_string)));
+            reply
+        }
+    }
 }
 
 #[cfg(test)]
@@ -145,5 +213,19 @@ mod tests {
         assert_eq!(usable_anilist_token(Some("   ")), None);
         assert_eq!(usable_anilist_token(None), None);
         assert_eq!(usable_anilist_token(Some(" token ")), Some("token"));
+    }
+
+    #[tokio::test]
+    async fn viewer_id_is_asked_once_per_token() {
+        let api = fake::FakeAniList::new(|_, _| Ok(serde_json::json!({ "data": { "Viewer": { "id": 42 } } })));
+        let cache = Mutex::new(None);
+
+        assert_eq!(viewer_id(&api, &cache, "tok").await, Ok(42));
+        assert_eq!(viewer_id(&api, &cache, "tok").await, Ok(42));
+        assert_eq!(api.calls().len(), 1, "second call must come from the cache");
+
+        // A different login is a different user.
+        viewer_id(&api, &cache, "other").await.unwrap();
+        assert_eq!(api.calls().len(), 2);
     }
 }
